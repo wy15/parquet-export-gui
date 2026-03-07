@@ -13,3 +13,4 @@ __pycache__/
 .cache
 nuitka-crash-report.xml
 output
+.home

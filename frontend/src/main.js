@@ -58,66 +58,8 @@ function render() {
               <span>数据源</span>
               <select id="backend">${renderBackendOptions()}</select>
             </label>
-
-            <div class="${state.form.backend === 'maxcompute' ? 'hidden' : ''}">
-              <label class="field">
-                <span>Host</span>
-                <input id="host" value="${escapeAttr(state.form.host)}" />
-              </label>
-              <label class="field">
-                <span>Port</span>
-                <input id="port" value="${escapeAttr(String(state.form.port || ''))}" />
-              </label>
-              <div class="field-row">
-                <label class="field grow">
-                  <span>Username</span>
-                  <input id="username" value="${escapeAttr(state.form.username)}" />
-                </label>
-                <label class="field grow">
-                  <span>Password</span>
-                  <input id="password" type="password" value="${escapeAttr(state.form.password)}" />
-                </label>
-              </div>
-              <label class="field">
-                <span>Database / Service Name</span>
-                <input id="database" value="${escapeAttr(state.form.database)}" />
-              </label>
-            </div>
-
-            <div class="${state.form.backend === 'maxcompute' ? '' : 'hidden'}">
-              <label class="field">
-                <span>Endpoint</span>
-                <input id="maxcomputeEndpoint" value="${escapeAttr(state.form.maxcomputeEndpoint)}" />
-              </label>
-              <label class="field">
-                <span>Project</span>
-                <input id="maxcomputeProject" value="${escapeAttr(state.form.maxcomputeProject)}" />
-              </label>
-              <label class="field">
-                <span>Access ID</span>
-                <input id="maxcomputeAccessId" value="${escapeAttr(state.form.maxcomputeAccessId)}" />
-              </label>
-              <label class="field">
-                <span>Access Key</span>
-                <input id="maxcomputeAccessKey" type="password" value="${escapeAttr(state.form.maxcomputeAccessKey)}" />
-              </label>
-            </div>
-
-            <div class="field-row">
-              <label class="field grow">
-                <span>Schema (optional)</span>
-                <input id="schema" value="${escapeAttr(state.form.schema)}" />
-              </label>
-              <label class="field grow">
-                <span>Table</span>
-                <input id="table" value="${escapeAttr(state.form.table)}" />
-              </label>
-            </div>
-
-            <label class="field ${state.form.backend === 'maxcompute' ? '' : 'hidden'}">
-              <span>Partition Spec</span>
-              <input id="partitionSpec" value="${escapeAttr(state.form.partitionSpec)}" placeholder="ds=20260306,region=cn" />
-            </label>
+            ${renderConnectionFields()}
+            ${renderObjectFields()}
           </section>
 
           <div class="panel-stack">
@@ -137,7 +79,7 @@ function render() {
                   <select id="compression">${renderCompressionOptions()}</select>
                 </label>
               </div>
-              <p class="panel-note">当前版本先使用 Wails 重构桌面壳，连接与导出仍通过 Python bridge 复用既有实现。</p>
+              <p class="panel-note">当前版本已切到 Go 原生导出链路，不再依赖 Python 运行时。</p>
               <div class="button-row">
                 <button id="testButton" class="button button-secondary" ${state.running ? 'disabled' : ''}>测试连接</button>
                 <button id="exportButton" class="button button-primary" ${state.running ? 'disabled' : ''}>开始导出</button>
@@ -161,9 +103,7 @@ function bindInputs() {
   document.querySelector('#backend').addEventListener('change', (event) => {
     const backend = event.target.value;
     state.form.backend = backend;
-    if (state.defaultPorts[backend]) {
-      state.form.port = state.defaultPorts[backend];
-    }
+    state.form.port = state.defaultPorts[backend] || 0;
     render();
   });
 
@@ -175,14 +115,14 @@ function bindInputs() {
     ['database', 'database'],
     ['schema', 'schema'],
     ['table', 'table'],
-    ['outputPath', 'outputPath'],
-    ['batchSize', 'batchSize'],
-    ['compression', 'compression'],
     ['maxcomputeEndpoint', 'maxcomputeEndpoint'],
     ['maxcomputeProject', 'maxcomputeProject'],
     ['maxcomputeAccessId', 'maxcomputeAccessId'],
     ['maxcomputeAccessKey', 'maxcomputeAccessKey'],
     ['partitionSpec', 'partitionSpec'],
+    ['outputPath', 'outputPath'],
+    ['batchSize', 'batchSize'],
+    ['compression', 'compression'],
   ].forEach(([id, key]) => {
     const element = document.querySelector(`#${id}`);
     if (!element) {
@@ -192,6 +132,13 @@ function bindInputs() {
       const value = event.target.value;
       if (key === 'port' || key === 'batchSize') {
         state.form[key] = value === '' ? 0 : Number(value);
+      } else if (key === 'table') {
+        state.form.table = value;
+        state.form.outputPath = replaceOutputFilename(state.form.outputPath, value);
+        const outputPathInput = document.querySelector('#outputPath');
+        if (outputPathInput) {
+          outputPathInput.value = state.form.outputPath;
+        }
       } else {
         state.form[key] = value;
       }
@@ -263,6 +210,94 @@ function backendHint() {
   return state.backendHints[state.form.backend] || '';
 }
 
+function isMaxCompute() {
+  return state.form.backend === 'maxcompute';
+}
+
+function renderConnectionFields() {
+  if (isMaxCompute()) {
+    return `
+      <label class="field">
+        <span>Endpoint</span>
+        <input id="maxcomputeEndpoint" value="${escapeAttr(state.form.maxcomputeEndpoint)}" placeholder="https://service.cn-hangzhou.maxcompute.aliyun.com/api" />
+      </label>
+      <label class="field">
+        <span>Project</span>
+        <input id="maxcomputeProject" value="${escapeAttr(state.form.maxcomputeProject)}" />
+      </label>
+      <div class="field-row">
+        <label class="field grow">
+          <span>Access ID</span>
+          <input id="maxcomputeAccessId" value="${escapeAttr(state.form.maxcomputeAccessId)}" />
+        </label>
+        <label class="field grow">
+          <span>Access Key</span>
+          <input id="maxcomputeAccessKey" type="password" value="${escapeAttr(state.form.maxcomputeAccessKey)}" />
+        </label>
+      </div>
+    `;
+  }
+
+  return `
+    <label class="field">
+      <span>Host</span>
+      <input id="host" value="${escapeAttr(state.form.host)}" />
+    </label>
+    <label class="field">
+      <span>Port</span>
+      <input id="port" value="${escapeAttr(String(state.form.port || ''))}" />
+    </label>
+    <div class="field-row">
+      <label class="field grow">
+        <span>Username</span>
+        <input id="username" value="${escapeAttr(state.form.username)}" />
+      </label>
+      <label class="field grow">
+        <span>Password</span>
+        <input id="password" type="password" value="${escapeAttr(state.form.password)}" />
+      </label>
+    </div>
+    <label class="field">
+      <span>Database / Service Name</span>
+      <input id="database" value="${escapeAttr(state.form.database)}" />
+    </label>
+  `;
+}
+
+function renderObjectFields() {
+  if (isMaxCompute()) {
+    return `
+      <div class="field-row">
+        <label class="field grow">
+          <span>Schema (optional)</span>
+          <input id="schema" value="${escapeAttr(state.form.schema)}" />
+        </label>
+        <label class="field grow">
+          <span>Table</span>
+          <input id="table" value="${escapeAttr(state.form.table)}" />
+        </label>
+      </div>
+      <label class="field">
+        <span>Partition Spec (optional)</span>
+        <input id="partitionSpec" value="${escapeAttr(state.form.partitionSpec)}" placeholder="ds='2026-03-07', region='cn'" />
+      </label>
+    `;
+  }
+
+  return `
+    <div class="field-row">
+      <label class="field grow">
+        <span>Schema (optional)</span>
+        <input id="schema" value="${escapeAttr(state.form.schema)}" />
+      </label>
+      <label class="field grow">
+        <span>Table</span>
+        <input id="table" value="${escapeAttr(state.form.table)}" />
+      </label>
+    </div>
+  `;
+}
+
 function renderBackendOptions() {
   return state.backends
     .map((option) => `<option value="${option.value}" ${option.value === state.form.backend ? 'selected' : ''}>${option.label}</option>`)
@@ -279,6 +314,22 @@ function appendLog(message) {
   const timestamp = new Date().toLocaleTimeString('zh-CN', { hour12: false });
   state.logs.push(`[${timestamp}] ${message}`);
   state.logs = state.logs.slice(-300);
+}
+
+function replaceOutputFilename(currentPath, tableName) {
+  const trimmedTable = String(tableName || '').trim();
+  if (!trimmedTable) {
+    return currentPath;
+  }
+
+  const normalizedPath = String(currentPath || '').trim();
+  const separatorIndex = Math.max(normalizedPath.lastIndexOf('/'), normalizedPath.lastIndexOf('\\'));
+  const directory = separatorIndex >= 0 ? normalizedPath.slice(0, separatorIndex + 1) : '';
+  const currentFile = separatorIndex >= 0 ? normalizedPath.slice(separatorIndex + 1) : normalizedPath;
+  const extensionIndex = currentFile.lastIndexOf('.');
+  const extension = extensionIndex > 0 ? currentFile.slice(extensionIndex) : '.parquet';
+
+  return `${directory}${trimmedTable}${extension}`;
 }
 
 function numberWithCommas(value) {
