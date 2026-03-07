@@ -5,6 +5,9 @@
 .venv/
 build/
 dist/
+frontend/node_modules/
+frontend/dist/
+frontend/package.json.md5
 __pycache__/
 *.pyc
 .cache

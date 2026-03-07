@@ -1,0 +1,38 @@
+:root {
+    --bg-top: #f4fbfa;
+    --bg-bottom: #eef6f7;
+    --panel-bg: rgba(255, 255, 255, 0.88);
+    --panel-border: rgba(15, 23, 42, 0.06);
+    --ink: #0f172a;
+    --muted: #5b6575;
+    --primary: #0f766e;
+    --secondary: #164e63;
+    --shadow: 0 22px 60px rgba(15, 23, 42, 0.08);
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+    min-height: 100%;
+}
+
+html {
+    background:
+        radial-gradient(circle at top left, rgba(15, 118, 110, 0.18), transparent 24%),
+        radial-gradient(circle at bottom right, rgba(234, 88, 12, 0.14), transparent 22%),
+        linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
+}
+
+body {
+    margin: 0;
+    color: var(--ink);
+    font-family: "Avenir Next", "Segoe UI", "PingFang SC", "Helvetica Neue", sans-serif;
+}
+
+#app {
+    min-height: 100vh;
+}

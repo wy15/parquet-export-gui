@@ -2,29 +2,68 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PYTHON_BIN="${PYTHON_BIN:-$ROOT_DIR/.venv/bin/python}"
 OUTPUT_DIR="$ROOT_DIR/dist/macos"
-CACHE_DIR="${NUITKA_CACHE_DIR:-$ROOT_DIR/.cache/nuitka}"
+FRONTEND_DIR="$ROOT_DIR/frontend"
 APP_NAME="Parquet Export Studio"
+APP_BUNDLE="$OUTPUT_DIR/$APP_NAME.app"
+APP_BINARY="$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 
-mkdir -p "$CACHE_DIR"
+export GOCACHE="${GOCACHE:-$ROOT_DIR/.cache/go-build}"
+export GOMODCACHE="${GOMODCACHE:-$ROOT_DIR/.cache/go-mod}"
 
-NUITKA_CACHE_DIR="$CACHE_DIR" "$PYTHON_BIN" -m nuitka \
-  --standalone \
-  --macos-create-app-bundle \
-  --assume-yes-for-downloads \
-  --python-flag=-m \
-  --include-package-data=nicegui:templates/index.html \
-  --include-package-data=nicegui:elements/*.js \
-  --include-package-data=nicegui:elements/*.vue \
-  --no-deployment-flag=self-execution \
-  --noinclude-data-files=nicegui/elements/lib/mermaid/chunks/mermaid.esm.min \
-  --nofollow-import-to=tkinter,pytest,pyarrow.tests \
-  --output-filename="$APP_NAME" \
-  --output-folder-name="$APP_NAME.app" \
-  --macos-app-name="$APP_NAME" \
-  --product-name="$APP_NAME" \
-  --output-dir="$OUTPUT_DIR" \
-  "$ROOT_DIR/src/parquet_export_gui"
+mkdir -p "$OUTPUT_DIR" "$GOCACHE" "$GOMODCACHE"
 
-echo "macOS build finished: $OUTPUT_DIR"
+if [[ ! -d "$FRONTEND_DIR/node_modules" ]]; then
+  (
+    cd "$FRONTEND_DIR"
+    npm install
+  )
+fi
+
+(
+  cd "$FRONTEND_DIR"
+  npm run build
+)
+
+mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
+
+go build \
+  -buildvcs=false \
+  -tags desktop,wv2runtime.download,production \
+  -ldflags "-w -s" \
+  -o "$APP_BINARY"
+
+cat >"$APP_BUNDLE/Contents/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>zh_CN</string>
+    <key>CFBundleDisplayName</key>
+    <string>$APP_NAME</string>
+    <key>CFBundleExecutable</key>
+    <string>$APP_NAME</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.qima.parquetexportstudio</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>$APP_NAME</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>0.1.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>10.13.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+  </dict>
+</plist>
+EOF
+
+/usr/bin/xattr -rc "$APP_BUNDLE" 2>/dev/null || true
+
+echo "macOS build finished: $OUTPUT_DIR/$APP_NAME.app"

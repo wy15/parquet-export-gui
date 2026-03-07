@@ -1,30 +1,30 @@
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-$python = if ($env:PYTHON_BIN) { $env:PYTHON_BIN } else { Join-Path $root ".venv\Scripts\python.exe" }
 $output = Join-Path $root "dist\windows"
-$cache = if ($env:NUITKA_CACHE_DIR) { $env:NUITKA_CACHE_DIR } else { Join-Path $root ".cache\nuitka" }
+$frontend = Join-Path $root "frontend"
 $appName = "Parquet Export Studio"
+$buildOutput = Join-Path $output "$appName.exe"
 
-New-Item -ItemType Directory -Force -Path $cache | Out-Null
+$env:GOCACHE = if ($env:GOCACHE) { $env:GOCACHE } else { Join-Path $root ".cache\go-build" }
+$env:GOMODCACHE = if ($env:GOMODCACHE) { $env:GOMODCACHE } else { Join-Path $root ".cache\go-mod" }
 
-& {
-  $env:NUITKA_CACHE_DIR = $cache
-  & $python -m nuitka `
-  --standalone `
-  --assume-yes-for-downloads `
-  --windows-console-mode=disable `
-  --python-flag=-m `
-  --include-package-data=nicegui:templates/index.html `
-  --include-package-data=nicegui:elements/*.js `
-  --include-package-data=nicegui:elements/*.vue `
-  --no-deployment-flag=self-execution `
-  --noinclude-data-files=nicegui/elements/lib/mermaid/chunks/mermaid.esm.min `
-  --nofollow-import-to=tkinter,pytest,pyarrow.tests `
-  --output-filename=$appName `
-  --product-name=$appName `
-  --output-dir=$output `
-  (Join-Path $root "src\parquet_export_gui")
+New-Item -ItemType Directory -Force -Path $output, $env:GOCACHE, $env:GOMODCACHE | Out-Null
+
+if (-not (Test-Path (Join-Path $frontend "node_modules"))) {
+  Push-Location $frontend
+  npm install
+  Pop-Location
 }
 
-Write-Host "Windows build finished: $output"
+Push-Location $frontend
+npm run build
+Pop-Location
+
+go build `
+  -buildvcs=false `
+  -tags "desktop,wv2runtime.download,production" `
+  -ldflags "-H=windowsgui -w -s" `
+  -o $buildOutput
+
+Write-Host "Windows build finished: $buildOutput"
