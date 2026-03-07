@@ -6,6 +6,18 @@ export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
 }
 
+export function CheckExportOutput(arg1) {
+  return window['go']['main']['App']['CheckExportOutput'](arg1);
+}
+
+export function GetGeneratedFiles() {
+  return window['go']['main']['App']['GetGeneratedFiles']();
+}
+
 export function StartTask(arg1, arg2) {
   return window['go']['main']['App']['StartTask'](arg1, arg2);
+}
+
+export function CreateZipArchive(arg1) {
+  return window['go']['main']['App']['CreateZipArchive'](arg1);
 }

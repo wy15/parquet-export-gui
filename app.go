@@ -7,14 +7,16 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 type App struct {
-	ctx     context.Context
-	mu      sync.Mutex
-	running bool
+	ctx            context.Context
+	mu             sync.Mutex
+	running        bool
+	generatedFiles []GeneratedFile
 }
 
 type Option struct {
@@ -23,22 +25,23 @@ type Option struct {
 }
 
 type ExportRequest struct {
-	Backend              string `json:"backend"`
-	OutputPath           string `json:"outputPath"`
-	Table                string `json:"table"`
-	BatchSize            int    `json:"batchSize"`
-	Compression          string `json:"compression"`
-	Schema               string `json:"schema"`
-	Host                 string `json:"host"`
-	Port                 int    `json:"port"`
-	Username             string `json:"username"`
-	Password             string `json:"password"`
-	Database             string `json:"database"`
-	MaxComputeEndpoint   string `json:"maxcomputeEndpoint"`
-	MaxComputeProject    string `json:"maxcomputeProject"`
-	MaxComputeAccessID   string `json:"maxcomputeAccessId"`
-	MaxComputeAccessKey  string `json:"maxcomputeAccessKey"`
-	PartitionSpec        string `json:"partitionSpec"`
+	Backend             string `json:"backend"`
+	OutputPath          string `json:"outputPath"`
+	ConflictPolicy      string `json:"conflictPolicy"`
+	Table               string `json:"table"`
+	BatchSize           int    `json:"batchSize"`
+	Compression         string `json:"compression"`
+	Schema              string `json:"schema"`
+	Host                string `json:"host"`
+	Port                int    `json:"port"`
+	Username            string `json:"username"`
+	Password            string `json:"password"`
+	Database            string `json:"database"`
+	MaxComputeEndpoint  string `json:"maxcomputeEndpoint"`
+	MaxComputeProject   string `json:"maxcomputeProject"`
+	MaxComputeAccessID  string `json:"maxcomputeAccessId"`
+	MaxComputeAccessKey string `json:"maxcomputeAccessKey"`
+	PartitionSpec       string `json:"partitionSpec"`
 }
 
 type AppConfig struct {
@@ -47,6 +50,29 @@ type AppConfig struct {
 	DefaultPorts map[string]int    `json:"defaultPorts"`
 	DefaultState ExportRequest     `json:"defaultState"`
 	BackendHints map[string]string `json:"backendHints"`
+}
+
+type ExportOutputCheck struct {
+	Exists        bool   `json:"exists"`
+	ResolvedPath  string `json:"resolvedPath"`
+	SuggestedPath string `json:"suggestedPath"`
+}
+
+type GeneratedFile struct {
+	Path      string `json:"path"`
+	Name      string `json:"name"`
+	Size      int64  `json:"size"`
+	CreatedAt string `json:"createdAt"`
+}
+
+type ZipRequest struct {
+	Files    []string `json:"files"`
+	Password string   `json:"password"`
+}
+
+type ZipResult struct {
+	OutputPath string `json:"outputPath"`
+	FileCount  int    `json:"fileCount"`
 }
 
 type TaskEvent struct {
@@ -85,14 +111,14 @@ func (a *App) GetConfig() AppConfig {
 			Backend:     "oracle",
 			OutputPath:  filepath.Join(userHomeDir(), "Downloads", "export.parquet"),
 			BatchSize:   5000,
-			Compression: "snappy",
+			Compression: "zstd",
 			Port:        1521,
 		},
 		BackendHints: map[string]string{
-			"oracle":     "Oracle 现在改用 Go 原生驱动直连，不再依赖 Python 运行时。",
+			"oracle":     "Oracle 采用 Go 原生驱动直连。",
 			"mysql":      "MySQL 采用 Go 原生流式查询和 Arrow/Parquet 写入。",
 			"postgresql": "PostgreSQL 采用 Go 原生驱动导出，整个链路已不再依赖外部解释器。",
-			"maxcompute": "MaxCompute 已恢复为 Go 原生接入，使用官方 ODPS SQL driver 直连。",
+			"maxcompute": "MaxCompute 采用 Go 原生接入，使用官方 ODPS SQL driver 直连。",
 		},
 	}
 }
@@ -128,6 +154,65 @@ func (a *App) StartTask(kind string, request ExportRequest) error {
 	return nil
 }
 
+func (a *App) GetGeneratedFiles() []GeneratedFile {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	files := make([]GeneratedFile, len(a.generatedFiles))
+	for i, file := range a.generatedFiles {
+		if info, err := os.Stat(file.Path); err == nil {
+			file.Size = info.Size()
+			file.CreatedAt = info.ModTime().Format(time.RFC3339)
+			a.generatedFiles[i] = file
+		}
+		files[i] = file
+	}
+	return files
+}
+
+func (a *App) CreateZipArchive(request ZipRequest) (ZipResult, error) {
+	files, err := a.validateZipRequest(request)
+	if err != nil {
+		return ZipResult{}, err
+	}
+
+	outputPath := buildZipOutputPath(files[0])
+	if err := writeZipArchive(outputPath, files, request.Password); err != nil {
+		return ZipResult{}, err
+	}
+
+	return ZipResult{
+		OutputPath: outputPath,
+		FileCount:  len(files),
+	}, nil
+}
+
+func (a *App) CheckExportOutput(path string) (ExportOutputCheck, error) {
+	resolvedPath, err := resolveOutputPath(path)
+	if err != nil {
+		return ExportOutputCheck{}, err
+	}
+
+	exists, err := fileExists(resolvedPath)
+	if err != nil {
+		return ExportOutputCheck{}, err
+	}
+
+	suggestedPath := resolvedPath
+	if exists {
+		suggestedPath, err = nextAvailablePath(resolvedPath)
+		if err != nil {
+			return ExportOutputCheck{}, err
+		}
+	}
+
+	return ExportOutputCheck{
+		Exists:        exists,
+		ResolvedPath:  resolvedPath,
+		SuggestedPath: suggestedPath,
+	}, nil
+}
+
 func (a *App) emit(event TaskEvent) {
 	if a.ctx == nil {
 		return
@@ -141,4 +226,32 @@ func userHomeDir() string {
 		return "."
 	}
 	return home
+}
+
+func (a *App) rememberGeneratedFile(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+
+	file := GeneratedFile{
+		Path:      path,
+		Name:      filepath.Base(path),
+		Size:      info.Size(),
+		CreatedAt: info.ModTime().Format(time.RFC3339),
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	filtered := make([]GeneratedFile, 0, len(a.generatedFiles)+1)
+	filtered = append(filtered, file)
+	for _, item := range a.generatedFiles {
+		if item.Path == path {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	a.generatedFiles = filtered
+	return nil
 }

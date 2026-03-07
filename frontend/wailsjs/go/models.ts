@@ -3,6 +3,7 @@ export namespace main {
 	export class ExportRequest {
 	    backend: string;
 	    outputPath: string;
+	    conflictPolicy: string;
 	    table: string;
 	    batchSize: number;
 	    compression: string;
@@ -26,6 +27,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.backend = source["backend"];
 	        this.outputPath = source["outputPath"];
+	        this.conflictPolicy = source["conflictPolicy"];
 	        this.table = source["table"];
 	        this.batchSize = source["batchSize"];
 	        this.compression = source["compression"];
@@ -40,6 +42,40 @@ export namespace main {
 	        this.maxcomputeAccessId = source["maxcomputeAccessId"];
 	        this.maxcomputeAccessKey = source["maxcomputeAccessKey"];
 	        this.partitionSpec = source["partitionSpec"];
+	    }
+	}
+	export class ExportOutputCheck {
+	    exists: boolean;
+	    resolvedPath: string;
+	    suggestedPath: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ExportOutputCheck(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.exists = source["exists"];
+	        this.resolvedPath = source["resolvedPath"];
+	        this.suggestedPath = source["suggestedPath"];
+	    }
+	}
+	export class GeneratedFile {
+	    path: string;
+	    name: string;
+	    size: number;
+	    createdAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new GeneratedFile(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.name = source["name"];
+	        this.size = source["size"];
+	        this.createdAt = source["createdAt"];
 	    }
 	}
 	export class Option {
@@ -94,7 +130,34 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class ZipRequest {
+	    files: string[];
+	    password: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ZipRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.files = source["files"];
+	        this.password = source["password"];
+	    }
+	}
+	export class ZipResult {
+	    outputPath: string;
+	    fileCount: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ZipResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.outputPath = source["outputPath"];
+	        this.fileCount = source["fileCount"];
+	    }
+	}
 	
 
 }
-

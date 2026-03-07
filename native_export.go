@@ -15,13 +15,13 @@ import (
 	"time"
 	"unicode/utf8"
 
+	_ "github.com/aliyun/aliyun-odps-go-sdk/sqldriver"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/apache/arrow-go/v18/parquet"
 	"github.com/apache/arrow-go/v18/parquet/compress"
 	"github.com/apache/arrow-go/v18/parquet/pqarrow"
-	_ "github.com/aliyun/aliyun-odps-go-sdk/sqldriver"
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	go_ora "github.com/sijms/go-ora/v2"
@@ -127,6 +127,10 @@ func (a *App) exportTableToParquet(request ExportRequest) (exportResult, error) 
 	if err != nil {
 		return exportResult{}, err
 	}
+	outputPath, err = resolveExportConflict(outputPath, request.ConflictPolicy)
+	if err != nil {
+		return exportResult{}, err
+	}
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
 		return exportResult{}, err
 	}
@@ -158,7 +162,11 @@ func (a *App) exportTableToParquet(request ExportRequest) (exportResult, error) 
 	if err != nil {
 		return exportResult{}, err
 	}
-	defer file.Close()
+	defer func() {
+		if file != nil {
+			_ = file.Close()
+		}
+	}()
 
 	writerProps := parquet.NewWriterProperties(
 		parquet.WithCompression(parquetCompression(request.Compression)),
@@ -173,6 +181,11 @@ func (a *App) exportTableToParquet(request ExportRequest) (exportResult, error) 
 	if err != nil {
 		return exportResult{}, err
 	}
+	defer func() {
+		if fileWriter != nil {
+			_ = fileWriter.Close()
+		}
+	}()
 	builder := array.NewRecordBuilder(memory.DefaultAllocator, schema)
 	defer builder.Release()
 	builder.Reserve(request.normalizedBatchSize())
@@ -222,6 +235,16 @@ func (a *App) exportTableToParquet(request ExportRequest) (exportResult, error) 
 		a.emit(TaskEvent{Kind: "export", Type: "log", Message: "源表为空，已生成空的 Parquet 文件"})
 	}
 	a.emit(TaskEvent{Kind: "export", Type: "log", Message: fmt.Sprintf("导出完成，总计 %s 行", formatRows(totalRows))})
+
+	if err := fileWriter.Close(); err != nil {
+		return exportResult{}, err
+	}
+	fileWriter = nil
+	file = nil
+
+	if err := a.rememberGeneratedFile(outputPath); err != nil {
+		return exportResult{}, err
+	}
 
 	return exportResult{OutputPath: outputPath, RowsWritten: totalRows}, nil
 }
@@ -506,6 +529,53 @@ func resolveOutputPath(path string) (string, error) {
 		cleaned = filepath.Join(home, strings.TrimPrefix(cleaned, "~/"))
 	}
 	return filepath.Abs(filepath.Clean(cleaned))
+}
+
+func resolveExportConflict(outputPath, policy string) (string, error) {
+	exists, err := fileExists(outputPath)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		return outputPath, nil
+	}
+
+	switch strings.ToLower(strings.TrimSpace(policy)) {
+	case "", "overwrite":
+		return outputPath, nil
+	case "rename":
+		return nextAvailablePath(outputPath)
+	default:
+		return "", fmt.Errorf("不支持的文件冲突策略: %s", policy)
+	}
+}
+
+func fileExists(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
+}
+
+func nextAvailablePath(path string) (string, error) {
+	extension := filepath.Ext(path)
+	base := strings.TrimSuffix(path, extension)
+	candidate := path
+
+	for index := 1; ; index++ {
+		exists, err := fileExists(candidate)
+		if err != nil {
+			return "", err
+		}
+		if !exists {
+			return candidate, nil
+		}
+		candidate = fmt.Sprintf("%s-%d%s", base, index, extension)
+	}
 }
 
 func fullTableName(request ExportRequest) string {
