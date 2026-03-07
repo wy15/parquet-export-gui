@@ -69,6 +69,12 @@ Windows:
 ./scripts/build_windows.ps1
 ```
 
+macOS 交叉编译 Windows `.exe`:
+
+```bash
+./scripts/build_windows_from_macos.sh
+```
+
 默认输出目录：
 
 - macOS: `dist/macos/Parquet Export Studio.app`
@@ -77,6 +83,7 @@ Windows:
 说明：
 
 - 当前构建脚本直接使用 `npm run build` 和 `go build`，不依赖 Wails CLI
+- `build_windows_from_macos.sh` 只能在 macOS 上生成交叉编译的 `.exe`，不包含 Windows 安装器或签名
 
 ## 目录结构
 
