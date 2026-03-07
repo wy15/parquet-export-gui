@@ -7,3 +7,6 @@ build/
 dist/
 __pycache__/
 *.pyc
+.cache
+nuitka-crash-report.xml
+output
