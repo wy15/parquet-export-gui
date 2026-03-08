@@ -7,6 +7,7 @@ FRONTEND_DIR="$ROOT_DIR/frontend"
 APP_NAME="Parquet Export Studio"
 APP_BUNDLE="$OUTPUT_DIR/$APP_NAME.app"
 APP_BINARY="$APP_BUNDLE/Contents/MacOS/$APP_NAME"
+ICON_SOURCE="$ROOT_DIR/build/darwin/iconfile.icns"
 
 export GOCACHE="${GOCACHE:-$ROOT_DIR/.cache/go-build}"
 export GOMODCACHE="${GOMODCACHE:-$ROOT_DIR/.cache/go-mod}"
@@ -25,7 +26,10 @@ fi
   npm run build
 )
 
+python3 "$ROOT_DIR/scripts/generate_app_icons.py"
+
 mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
+cp "$ICON_SOURCE" "$APP_BUNDLE/Contents/Resources/iconfile.icns"
 
 go build \
   -buildvcs=false \
@@ -48,6 +52,8 @@ cat >"$APP_BUNDLE/Contents/Info.plist" <<EOF
     <string>com.qima.parquetexportstudio</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
+    <key>CFBundleIconFile</key>
+    <string>iconfile</string>
     <key>CFBundleName</key>
     <string>$APP_NAME</string>
     <key>CFBundlePackageType</key>

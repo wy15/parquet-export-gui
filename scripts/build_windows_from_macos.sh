@@ -12,11 +12,13 @@ FRONTEND_DIR="$ROOT_DIR/frontend"
 APP_NAME="Parquet Export Studio"
 BUILD_OUTPUT="$OUTPUT_DIR/$APP_NAME.exe"
 WINDOWS_ARCH="${WINDOWS_ARCH:-amd64}"
+RESOURCE_SYSO="$ROOT_DIR/rsrc_windows_${WINDOWS_ARCH}.syso"
 
 export GOCACHE="${GOCACHE:-$ROOT_DIR/.cache/go-build}"
 export GOMODCACHE="${GOMODCACHE:-$ROOT_DIR/.cache/go-mod}"
 
 mkdir -p "$OUTPUT_DIR" "$GOCACHE" "$GOMODCACHE"
+trap 'rm -f "$RESOURCE_SYSO"' EXIT
 
 if [[ ! -d "$FRONTEND_DIR/node_modules" ]]; then
   (
@@ -29,6 +31,9 @@ fi
   cd "$FRONTEND_DIR"
   npm run build
 )
+
+python3 "$ROOT_DIR/scripts/generate_app_icons.py"
+go run "$ROOT_DIR/scripts/generate_windows_syso.go" "$WINDOWS_ARCH"
 
 GOOS=windows \
 GOARCH="$WINDOWS_ARCH" \
