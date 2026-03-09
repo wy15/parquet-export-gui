@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"net/url"
@@ -15,6 +16,11 @@ import (
 	"time"
 	"unicode/utf8"
 
+	odpssdk "github.com/aliyun/aliyun-odps-go-sdk/odps"
+	odpsdata "github.com/aliyun/aliyun-odps-go-sdk/odps/data"
+	odpsdatatype "github.com/aliyun/aliyun-odps-go-sdk/odps/datatype"
+	odpstableschema "github.com/aliyun/aliyun-odps-go-sdk/odps/tableschema"
+	odpstunnel "github.com/aliyun/aliyun-odps-go-sdk/odps/tunnel"
 	_ "github.com/aliyun/aliyun-odps-go-sdk/sqldriver"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -106,6 +112,8 @@ func (a *App) testConnection(request ExportRequest) error {
 	testSQL := "SELECT 1"
 	if request.Backend == "oracle" {
 		testSQL = "SELECT 1 FROM DUAL"
+	} else if request.Backend == "maxcompute" {
+		testSQL = "SELECT 1;"
 	}
 
 	var result int
@@ -135,13 +143,31 @@ func (a *App) exportTableToParquet(request ExportRequest) (exportResult, error) 
 		return exportResult{}, err
 	}
 
+	var result exportResult
+	if request.Backend == "maxcompute" {
+		result, err = a.exportMaxComputeTableToParquet(request, outputPath)
+	} else {
+		result, err = a.exportSQLTableToParquet(request, outputPath)
+	}
+	if err != nil {
+		return exportResult{}, err
+	}
+
+	if err := a.rememberGeneratedFile(result.OutputPath); err != nil {
+		return exportResult{}, err
+	}
+
+	return result, nil
+}
+
+func (a *App) exportSQLTableToParquet(request ExportRequest, outputPath string) (exportResult, error) {
 	db, err := openDatabase(request)
 	if err != nil {
 		return exportResult{}, err
 	}
 	defer db.Close()
 
-	query := "SELECT * FROM " + fullTableName(request)
+	query := buildExportQuery(request)
 	a.emit(TaskEvent{Kind: "export", Type: "log", Message: fmt.Sprintf("准备导出 %s -> %s", fullTableName(request), outputPath)})
 	a.emit(TaskEvent{Kind: "export", Type: "log", Message: fmt.Sprintf("执行查询: %s", query)})
 
@@ -242,11 +268,136 @@ func (a *App) exportTableToParquet(request ExportRequest) (exportResult, error) 
 	fileWriter = nil
 	file = nil
 
-	if err := a.rememberGeneratedFile(outputPath); err != nil {
+	return exportResult{OutputPath: outputPath, RowsWritten: totalRows}, nil
+}
+
+func (a *App) exportMaxComputeTableToParquet(request ExportRequest, outputPath string) (exportResult, error) {
+	session, err := openMaxComputeDownloadSession(request)
+	if err != nil {
 		return exportResult{}, err
 	}
 
+	columnDefs := inferMaxComputeColumnDefs(session.Schema().Columns)
+	schema := arrow.NewSchema(columnFields(columnDefs), nil)
+
+	file, err := os.Create(outputPath)
+	if err != nil {
+		return exportResult{}, err
+	}
+	defer func() {
+		if file != nil {
+			_ = file.Close()
+		}
+	}()
+
+	writerProps := parquet.NewWriterProperties(
+		parquet.WithCompression(parquetCompression(request.Compression)),
+		parquet.WithDictionaryDefault(false),
+	)
+	fileWriter, err := pqarrow.NewFileWriter(
+		schema,
+		file,
+		writerProps,
+		pqarrow.NewArrowWriterProperties(pqarrow.WithStoreSchema()),
+	)
+	if err != nil {
+		return exportResult{}, err
+	}
+	defer func() {
+		if fileWriter != nil {
+			_ = fileWriter.Close()
+		}
+	}()
+
+	builder := array.NewRecordBuilder(memory.DefaultAllocator, schema)
+	defer builder.Release()
+	builder.Reserve(request.normalizedBatchSize())
+
+	totalRows := 0
+	recordCount := session.RecordCount()
+	a.emit(TaskEvent{
+		Kind:    "export",
+		Type:    "log",
+		Message: fmt.Sprintf("使用 MaxCompute Tunnel 批量下载 %s -> %s", fullTableName(request), outputPath),
+	})
+	a.emit(TaskEvent{
+		Kind:    "export",
+		Type:    "log",
+		Message: fmt.Sprintf("创建 DownloadSession 成功，记录数: %s", formatRows(recordCount)),
+	})
+
+	for start := 0; start < recordCount; start += request.normalizedBatchSize() {
+		count := request.normalizedBatchSize()
+		if remaining := recordCount - start; remaining < count {
+			count = remaining
+		}
+
+		reader, err := session.OpenRecordReader(start, count, nil)
+		if err != nil {
+			return exportResult{}, err
+		}
+
+		batchRows, err := a.writeMaxComputeBatch(reader, builder, columnDefs)
+		closeErr := reader.Close()
+		if err != nil {
+			return exportResult{}, err
+		}
+		if closeErr != nil {
+			return exportResult{}, closeErr
+		}
+
+		if err := flushRecordBatch(fileWriter, builder); err != nil {
+			return exportResult{}, err
+		}
+
+		totalRows += batchRows
+		a.emit(TaskEvent{
+			Kind:    "export",
+			Type:    "log",
+			Message: fmt.Sprintf("已写入 %s 行", formatRows(totalRows)),
+		})
+	}
+
+	if totalRows == 0 {
+		a.emit(TaskEvent{Kind: "export", Type: "log", Message: "源表为空，已生成空的 Parquet 文件"})
+	}
+	a.emit(TaskEvent{Kind: "export", Type: "log", Message: fmt.Sprintf("导出完成，总计 %s 行", formatRows(totalRows))})
+
+	if err := fileWriter.Close(); err != nil {
+		return exportResult{}, err
+	}
+	fileWriter = nil
+	file = nil
+
 	return exportResult{OutputPath: outputPath, RowsWritten: totalRows}, nil
+}
+
+func (a *App) writeMaxComputeBatch(
+	reader *odpstunnel.RecordProtocReader,
+	builder *array.RecordBuilder,
+	columnDefs []columnDef,
+) (int, error) {
+	rowsWritten := 0
+
+	for {
+		record, err := reader.Read()
+		if errors.Is(err, io.EOF) {
+			return rowsWritten, nil
+		}
+		if err != nil {
+			return rowsWritten, err
+		}
+
+		values := make([]any, len(record))
+		for idx, value := range record {
+			values[idx] = convertMaxComputeValue(value)
+		}
+
+		if err := appendRow(builder, columnDefs, values); err != nil {
+			return rowsWritten, err
+		}
+		rowsWritten++
+	}
 }
 
 func validateRequest(request ExportRequest, requireOutput bool, requireTable bool) error {
@@ -578,6 +729,35 @@ func nextAvailablePath(path string) (string, error) {
 	}
 }
 
+func openMaxComputeDownloadSession(request ExportRequest) (*odpstunnel.DownloadSession, error) {
+	cfg := odpssdk.NewConfig()
+	cfg.AccessId = strings.TrimSpace(request.MaxComputeAccessID)
+	cfg.AccessKey = strings.TrimSpace(request.MaxComputeAccessKey)
+	cfg.Endpoint = strings.TrimSpace(request.MaxComputeEndpoint)
+	cfg.ProjectName = strings.TrimSpace(request.MaxComputeProject)
+
+	odpsIns := cfg.GenOdps()
+	schemaName := strings.TrimSpace(request.Schema)
+	if schemaName != "" {
+		odpsIns.SetCurrentSchemaName(schemaName)
+	}
+
+	tunnelIns := odpstunnel.NewTunnel(odpsIns)
+	options := make([]odpstunnel.Option, 0, 2)
+	if schemaName != "" {
+		options = append(options, odpstunnel.SessionCfg.WithSchemaName(schemaName))
+	}
+	if partitionSpec := strings.TrimSpace(request.PartitionSpec); partitionSpec != "" {
+		options = append(options, odpstunnel.SessionCfg.WithPartitionKey(partitionSpec))
+	}
+
+	return tunnelIns.CreateDownloadSession(
+		strings.TrimSpace(request.MaxComputeProject),
+		strings.TrimSpace(request.Table),
+		options...,
+	)
+}
+
 func fullTableName(request ExportRequest) string {
 	if request.Backend == "maxcompute" {
 		parts := make([]string, 0, 3)
@@ -600,6 +780,99 @@ func fullTableName(request ExportRequest) string {
 		return strings.TrimSpace(request.Table)
 	}
 	return strings.TrimSpace(request.Schema) + "." + strings.TrimSpace(request.Table)
+}
+
+func buildExportQuery(request ExportRequest) string {
+	query := "SELECT * FROM " + fullTableName(request)
+	if request.Backend == "maxcompute" {
+		return query + ";"
+	}
+	return query
+}
+
+func inferMaxComputeColumnDefs(columns []odpstableschema.Column) []columnDef {
+	result := make([]columnDef, 0, len(columns))
+	for _, column := range columns {
+		kind, dataType := inferMaxComputeColumnType(column.Type)
+		result = append(result, columnDef{
+			Name: column.Name,
+			Kind: kind,
+			Field: arrow.Field{
+				Name:     column.Name,
+				Type:     dataType,
+				Nullable: true,
+			},
+		})
+	}
+	return result
+}
+
+func inferMaxComputeColumnType(dataType odpsdatatype.DataType) (columnKind, arrow.DataType) {
+	switch dataType.ID() {
+	case odpsdatatype.BOOLEAN:
+		return columnBool, arrow.FixedWidthTypes.Boolean
+	case odpsdatatype.BIGINT, odpsdatatype.INT, odpsdatatype.SMALLINT, odpsdatatype.TINYINT:
+		return columnInt64, arrow.PrimitiveTypes.Int64
+	case odpsdatatype.FLOAT, odpsdatatype.DOUBLE:
+		return columnFloat64, arrow.PrimitiveTypes.Float64
+	case odpsdatatype.BINARY:
+		return columnBinary, arrow.BinaryTypes.Binary
+	default:
+		return columnString, arrow.BinaryTypes.String
+	}
+}
+
+func convertMaxComputeValue(value odpsdata.Data) any {
+	switch typed := value.(type) {
+	case nil:
+		return nil
+	case odpsdata.Bool:
+		return bool(typed)
+	case odpsdata.BigInt:
+		return int64(typed)
+	case odpsdata.Int:
+		return int64(typed)
+	case odpsdata.SmallInt:
+		return int64(typed)
+	case odpsdata.TinyInt:
+		return int64(typed)
+	case odpsdata.Float:
+		return float64(typed)
+	case odpsdata.Double:
+		return float64(typed)
+	case odpsdata.String:
+		return string(typed)
+	case odpsdata.Binary:
+		return []byte(typed)
+	case odpsdata.Date:
+		return typed.String()
+	case odpsdata.DateTime:
+		return typed.String()
+	case odpsdata.Timestamp:
+		return typed.String()
+	case odpsdata.TimestampNtz:
+		return typed.String()
+	case odpsdata.Char:
+		return typed.String()
+	case odpsdata.VarChar:
+		return typed.String()
+	case *odpsdata.Decimal:
+		return typed.String()
+	case *odpsdata.Json:
+		return typed.String()
+	case *odpsdata.Array:
+		return typed.String()
+	case *odpsdata.Map:
+		return typed.String()
+	case *odpsdata.Struct:
+		return typed.String()
+	case odpsdata.IntervalDayTime:
+		return typed.String()
+	case odpsdata.IntervalYearMonth:
+		return typed.String()
+	default:
+		return fmt.Sprint(typed)
+	}
 }
 
 func formatRows(value int) string {
