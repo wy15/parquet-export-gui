@@ -1,6 +1,11 @@
 # parquet-export-gui
 
-一个使用 Go + Wails 开发的桌面导出工具，用于把 Oracle（Thin 模式）、MySQL、PostgreSQL、MaxCompute 中的单表导出为本地 Parquet 文件。
+一个使用 Go 开发的 Parquet 导出工具，用于把 Oracle（Thin 模式）、MySQL、PostgreSQL、MaxCompute 中的单表导出为本地 Parquet 文件。
+
+当前包含两个版本：
+
+- GUI 桌面版：基于 Wails，适合 Windows 10+ 和 macOS
+- CLI 命令行版：纯 Go 交互式终端界面，适合低版本 Windows 和 Linux 环境
 
 ## 功能
 
@@ -9,7 +14,8 @@
 - 支持 MaxCompute 直连导出
 - 按批次读取并写入 Parquet，避免一次性占满内存
 - Wails 原生桌面窗口，前后端分离更清晰
-- 提供 Windows 和 macOS 两套 Go + Vite 构建脚本
+- 提供低版本 Windows 和 Linux 可用的交互式命令行版本
+- 提供 macOS 本机构建 GUI，以及 macOS 交叉编译 Windows GUI / Linux CLI 的脚本
 
 ## 环境要求
 
@@ -34,10 +40,18 @@ npm install
 
 ## 启动
 
+CLI:
+
+```bash
+go run .
+```
+
+GUI:
+
 ```bash
 cd frontend && npm run build
 cd ..
-go run .
+go run -tags desktop .
 ```
 
 ## 使用说明
@@ -57,33 +71,49 @@ go run .
 
 ## 构建
 
-macOS:
+macOS GUI:
 
 ```bash
 ./scripts/build_macos.sh
 ```
 
-Windows:
+Windows GUI:
 
 ```powershell
 ./scripts/build_windows.ps1
 ```
 
-macOS 交叉编译 Windows `.exe`:
+macOS 交叉编译 Windows GUI `.exe`:
 
 ```bash
 ./scripts/build_windows_from_macos.sh
 ```
 
+macOS 交叉编译低版本 Windows CLI `.exe`:
+
+```bash
+./scripts/build_windows_cli_from_macos.sh
+```
+
+macOS 交叉编译 Linux x64 CLI:
+
+```bash
+./scripts/build_linux_cli_from_macos.sh
+```
+
 默认输出目录：
 
 - macOS: `dist/macos/Parquet Export Studio.app`
-- Windows: `dist/windows/Parquet Export Studio.exe`
+- Windows GUI: `dist/windows/Parquet Export Studio.exe`
+- Windows CLI: `dist/windows-cli/Parquet Export Studio CLI.exe`
+- Linux CLI: `dist/linux-cli/parquet-export-studio-cli-linux-amd64`
 
 说明：
 
-- 当前构建脚本直接使用 `npm run build` 和 `go build`，不依赖 Wails CLI
-- `build_windows_from_macos.sh` 只能在 macOS 上生成交叉编译的 `.exe`，不包含 Windows 安装器或签名
+- GUI 构建脚本直接使用 `npm run build` 和 `go build`，不依赖 Wails CLI
+- `build_windows_from_macos.sh` 只能在 macOS 上生成 GUI `.exe`，不包含 Windows 安装器或签名
+- `build_windows_cli_from_macos.sh` 不依赖 Wails / WebView2，可直接从 macOS 交叉编译纯命令行 `.exe`
+- `build_linux_cli_from_macos.sh` 不依赖 Wails / WebView2，可直接从 macOS 交叉编译 Linux x64 命令行可执行文件
 
 ## 目录结构
 
@@ -91,11 +121,16 @@ macOS 交叉编译 Windows `.exe`:
 app.go
 native_export.go
 main.go
+main_cli.go
+app_desktop.go
 frontend/
 build/
 scripts/
   build_macos.sh
   build_windows.ps1
+  build_windows_from_macos.sh
+  build_windows_cli_from_macos.sh
+  build_linux_cli_from_macos.sh
 ```
 
 ## 限制

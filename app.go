@@ -1,22 +1,19 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
-
-	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 type App struct {
-	ctx            context.Context
 	mu             sync.Mutex
 	running        bool
 	generatedFiles []GeneratedFile
+	emitFunc       func(TaskEvent)
 }
 
 type Option struct {
@@ -88,10 +85,6 @@ func NewApp() *App {
 	return &App{}
 }
 
-func (a *App) startup(ctx context.Context) {
-	a.ctx = ctx
-}
-
 func (a *App) GetConfig() AppConfig {
 	return AppConfig{
 		Backends: []Option{
@@ -124,6 +117,14 @@ func (a *App) GetConfig() AppConfig {
 }
 
 func (a *App) StartTask(kind string, request ExportRequest) error {
+	return a.startTask(kind, request, true)
+}
+
+func (a *App) RunTaskSync(kind string, request ExportRequest) error {
+	return a.startTask(kind, request, false)
+}
+
+func (a *App) startTask(kind string, request ExportRequest, async bool) error {
 	if kind != "test" && kind != "export" {
 		return fmt.Errorf("unsupported task kind: %s", kind)
 	}
@@ -138,7 +139,7 @@ func (a *App) StartTask(kind string, request ExportRequest) error {
 
 	a.emit(TaskEvent{Kind: kind, Type: "running", Message: "true"})
 
-	go func() {
+	run := func() error {
 		defer func() {
 			a.mu.Lock()
 			a.running = false
@@ -148,10 +149,19 @@ func (a *App) StartTask(kind string, request ExportRequest) error {
 
 		if err := a.runTask(kind, request); err != nil {
 			a.emit(TaskEvent{Kind: kind, Type: "error", Error: err.Error()})
+			return err
 		}
-	}()
+		return nil
+	}
 
-	return nil
+	if async {
+		go func() {
+			_ = run()
+		}()
+		return nil
+	}
+
+	return run()
 }
 
 func (a *App) GetGeneratedFiles() []GeneratedFile {
@@ -214,10 +224,13 @@ func (a *App) CheckExportOutput(path string) (ExportOutputCheck, error) {
 }
 
 func (a *App) emit(event TaskEvent) {
-	if a.ctx == nil {
-		return
+	if a.emitFunc != nil {
+		a.emitFunc(event)
 	}
-	wruntime.EventsEmit(a.ctx, "task:event", event)
+}
+
+func (a *App) SetEmitter(fn func(TaskEvent)) {
+	a.emitFunc = fn
 }
 
 func userHomeDir() string {
