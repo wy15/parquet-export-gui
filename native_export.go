@@ -71,6 +71,12 @@ type columnDef struct {
 	Kind  columnKind
 }
 
+type parquetExportResources struct {
+	file       *os.File
+	fileWriter *pqarrow.FileWriter
+	builder    *array.RecordBuilder
+}
+
 func (a *App) runTask(kind string, request ExportRequest) error {
 	request.Backend = strings.ToLower(strings.TrimSpace(request.Backend))
 
@@ -184,37 +190,11 @@ func (a *App) exportSQLTableToParquet(request ExportRequest, outputPath string) 
 
 	columnDefs := inferColumnDefs(columnTypes)
 	schema := arrow.NewSchema(columnFields(columnDefs), nil)
-	file, err := os.Create(outputPath)
+	resources, err := newParquetExportResources(outputPath, schema, request.Compression, request.normalizedBatchSize())
 	if err != nil {
 		return exportResult{}, err
 	}
-	defer func() {
-		if file != nil {
-			_ = file.Close()
-		}
-	}()
-
-	writerProps := parquet.NewWriterProperties(
-		parquet.WithCompression(parquetCompression(request.Compression)),
-		parquet.WithDictionaryDefault(false),
-	)
-	fileWriter, err := pqarrow.NewFileWriter(
-		schema,
-		file,
-		writerProps,
-		pqarrow.NewArrowWriterProperties(pqarrow.WithStoreSchema()),
-	)
-	if err != nil {
-		return exportResult{}, err
-	}
-	defer func() {
-		if fileWriter != nil {
-			_ = fileWriter.Close()
-		}
-	}()
-	builder := array.NewRecordBuilder(memory.DefaultAllocator, schema)
-	defer builder.Release()
-	builder.Reserve(request.normalizedBatchSize())
+	defer resources.close()
 
 	values := make([]any, len(columnDefs))
 	scanTargets := make([]any, len(columnDefs))
@@ -230,13 +210,13 @@ func (a *App) exportSQLTableToParquet(request ExportRequest, outputPath string) 
 			return exportResult{}, err
 		}
 
-		if err := appendRow(builder, columnDefs, values); err != nil {
+		if err := appendRow(resources.builder, columnDefs, values); err != nil {
 			return exportResult{}, err
 		}
 
 		batchRows++
 		if batchRows >= request.normalizedBatchSize() {
-			if err := flushRecordBatch(fileWriter, builder); err != nil {
+			if err := flushRecordBatch(resources.fileWriter, resources.builder); err != nil {
 				return exportResult{}, err
 			}
 			totalRows += batchRows
@@ -250,7 +230,7 @@ func (a *App) exportSQLTableToParquet(request ExportRequest, outputPath string) 
 	}
 
 	if batchRows > 0 {
-		if err := flushRecordBatch(fileWriter, builder); err != nil {
+		if err := flushRecordBatch(resources.fileWriter, resources.builder); err != nil {
 			return exportResult{}, err
 		}
 		totalRows += batchRows
@@ -262,11 +242,9 @@ func (a *App) exportSQLTableToParquet(request ExportRequest, outputPath string) 
 	}
 	a.emit(TaskEvent{Kind: "export", Type: "log", Message: fmt.Sprintf("导出完成，总计 %s 行", formatRows(totalRows))})
 
-	if err := fileWriter.Close(); err != nil {
+	if err := resources.finish(); err != nil {
 		return exportResult{}, err
 	}
-	fileWriter = nil
-	file = nil
 
 	return exportResult{OutputPath: outputPath, RowsWritten: totalRows}, nil
 }
@@ -279,39 +257,11 @@ func (a *App) exportMaxComputeTableToParquet(request ExportRequest, outputPath s
 
 	columnDefs := inferMaxComputeColumnDefs(session.Schema().Columns)
 	schema := arrow.NewSchema(columnFields(columnDefs), nil)
-
-	file, err := os.Create(outputPath)
+	resources, err := newParquetExportResources(outputPath, schema, request.Compression, request.normalizedBatchSize())
 	if err != nil {
 		return exportResult{}, err
 	}
-	defer func() {
-		if file != nil {
-			_ = file.Close()
-		}
-	}()
-
-	writerProps := parquet.NewWriterProperties(
-		parquet.WithCompression(parquetCompression(request.Compression)),
-		parquet.WithDictionaryDefault(false),
-	)
-	fileWriter, err := pqarrow.NewFileWriter(
-		schema,
-		file,
-		writerProps,
-		pqarrow.NewArrowWriterProperties(pqarrow.WithStoreSchema()),
-	)
-	if err != nil {
-		return exportResult{}, err
-	}
-	defer func() {
-		if fileWriter != nil {
-			_ = fileWriter.Close()
-		}
-	}()
-
-	builder := array.NewRecordBuilder(memory.DefaultAllocator, schema)
-	defer builder.Release()
-	builder.Reserve(request.normalizedBatchSize())
+	defer resources.close()
 
 	totalRows := 0
 	recordCount := session.RecordCount()
@@ -337,7 +287,7 @@ func (a *App) exportMaxComputeTableToParquet(request ExportRequest, outputPath s
 			return exportResult{}, err
 		}
 
-		batchRows, err := a.writeMaxComputeBatch(reader, builder, columnDefs)
+		batchRows, err := a.writeMaxComputeBatch(reader, resources.builder, columnDefs)
 		closeErr := reader.Close()
 		if err != nil {
 			return exportResult{}, err
@@ -346,7 +296,7 @@ func (a *App) exportMaxComputeTableToParquet(request ExportRequest, outputPath s
 			return exportResult{}, closeErr
 		}
 
-		if err := flushRecordBatch(fileWriter, builder); err != nil {
+		if err := flushRecordBatch(resources.fileWriter, resources.builder); err != nil {
 			return exportResult{}, err
 		}
 
@@ -363,11 +313,9 @@ func (a *App) exportMaxComputeTableToParquet(request ExportRequest, outputPath s
 	}
 	a.emit(TaskEvent{Kind: "export", Type: "log", Message: fmt.Sprintf("导出完成，总计 %s 行", formatRows(totalRows))})
 
-	if err := fileWriter.Close(); err != nil {
+	if err := resources.finish(); err != nil {
 		return exportResult{}, err
 	}
-	fileWriter = nil
-	file = nil
 
 	return exportResult{OutputPath: outputPath, RowsWritten: totalRows}, nil
 }
@@ -649,6 +597,76 @@ func flushRecordBatch(writer *pqarrow.FileWriter, builder *array.RecordBuilder) 
 		return nil
 	}
 	return writer.WriteBuffered(record)
+}
+
+func newParquetExportResources(
+	outputPath string,
+	schema *arrow.Schema,
+	compression string,
+	batchSize int,
+) (*parquetExportResources, error) {
+	file, err := os.Create(outputPath)
+	if err != nil {
+		return nil, err
+	}
+
+	writerProps := parquet.NewWriterProperties(
+		parquet.WithCompression(parquetCompression(compression)),
+		parquet.WithDictionaryDefault(false),
+	)
+	fileWriter, err := pqarrow.NewFileWriter(
+		schema,
+		file,
+		writerProps,
+		pqarrow.NewArrowWriterProperties(pqarrow.WithStoreSchema()),
+	)
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+
+	builder := array.NewRecordBuilder(memory.DefaultAllocator, schema)
+	builder.Reserve(batchSize)
+
+	return &parquetExportResources{
+		file:       file,
+		fileWriter: fileWriter,
+		builder:    builder,
+	}, nil
+}
+
+func (r *parquetExportResources) finish() error {
+	if r == nil || r.fileWriter == nil {
+		return nil
+	}
+
+	if err := r.fileWriter.Close(); err != nil {
+		return err
+	}
+	r.fileWriter = nil
+
+	if r.file != nil {
+		r.file = nil
+	}
+	return nil
+}
+
+func (r *parquetExportResources) close() {
+	if r == nil {
+		return
+	}
+	if r.builder != nil {
+		r.builder.Release()
+		r.builder = nil
+	}
+	if r.fileWriter != nil {
+		_ = r.fileWriter.Close()
+		r.fileWriter = nil
+	}
+	if r.file != nil {
+		_ = r.file.Close()
+		r.file = nil
+	}
 }
 
 func parquetCompression(name string) compress.Compression {
