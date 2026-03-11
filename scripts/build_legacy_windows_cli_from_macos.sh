@@ -20,7 +20,16 @@ if [[ -z "$GO_BIN" && -x "$TEMP_GO_BIN" ]]; then
 fi
 
 if [[ -z "$GO_BIN" ]]; then
-  GO_BIN="go"
+  echo "Go 1.20.x is required for the legacy Windows 7/8 CLI build." >&2
+  echo "Set LEGACY_GO_BIN=/path/to/go1.20.x/bin/go or prepare $TEMP_GO_BIN first." >&2
+  exit 1
+fi
+
+GO_VERSION="$("$GO_BIN" version 2>/dev/null || true)"
+if [[ ! "$GO_VERSION" =~ go1\.20(\.|[[:space:]]) ]]; then
+  echo "Legacy Windows 7/8 CLI must be built with Go 1.20.x." >&2
+  echo "Selected toolchain: ${GO_VERSION:-<unavailable>} ($GO_BIN)" >&2
+  exit 1
 fi
 
 export GOCACHE="${GOCACHE:-$ROOT_DIR/.cache/go-build}"
