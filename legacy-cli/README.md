@@ -31,6 +31,14 @@
 LEGACY_GO_BIN=/path/to/go1.20.x/bin/go ./scripts/build_legacy_windows_cli_from_macos.sh
 ```
 
+编译 32 位 x86：
+
+```bash
+WINDOWS_ARCH=386 LEGACY_GO_BIN=/path/to/go1.20.x/bin/go ./scripts/build_legacy_windows_cli_from_macos.sh
+```
+
+未设置时默认使用 `WINDOWS_ARCH=amd64`。
+
 本地运行：
 
 ```bash
