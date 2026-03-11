@@ -590,12 +590,12 @@ func appendRow(builder *array.RecordBuilder, columnDefs []columnDef, values []an
 }
 
 func flushRecordBatch(writer *pqarrow.FileWriter, builder *array.RecordBuilder) error {
-	record := builder.NewRecord()
-	defer record.Release()
-	if record.NumRows() == 0 {
+	recordBatch := builder.NewRecordBatch()
+	defer recordBatch.Release()
+	if recordBatch.NumRows() == 0 {
 		return nil
 	}
-	return writer.WriteBuffered(record)
+	return writer.WriteBuffered(recordBatch)
 }
 
 func newParquetExportResources(

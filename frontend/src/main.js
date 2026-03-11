@@ -2,7 +2,6 @@ import "./style.css";
 import "./app.css";
 
 import { EventsOn } from "../wailsjs/runtime/runtime";
-import { CheckExportOutput, CreateZipArchive, GetConfig, GetGeneratedFiles, StartTask } from "../wailsjs/go/main/App";
 
 const appRoot = document.querySelector("#app");
 
@@ -51,6 +50,34 @@ const state = {
 let noticeTimer = null;
 let lastRenderedLogCount = 0;
 let stickLogToBottom = true;
+
+function getAppBinding() {
+  const appBinding = window.go?.main?.App || window.go?.core?.App;
+  if (!appBinding) {
+    throw new Error("Wails App binding is unavailable");
+  }
+  return appBinding;
+}
+
+function GetConfig() {
+  return getAppBinding().GetConfig();
+}
+
+function CheckExportOutput(path) {
+  return getAppBinding().CheckExportOutput(path);
+}
+
+function GetGeneratedFiles() {
+  return getAppBinding().GetGeneratedFiles();
+}
+
+function StartTask(kind, request) {
+  return getAppBinding().StartTask(kind, request);
+}
+
+function CreateZipArchive(request) {
+  return getAppBinding().CreateZipArchive(request);
+}
 
 function render() {
   appRoot.innerHTML = `
@@ -711,7 +738,21 @@ function escapeHtml(value) {
   return String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
+async function waitForWailsBridge(timeoutMs = 4000) {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    if (window.runtime && (window.go?.main?.App || window.go?.core?.App)) {
+      return;
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 16));
+  }
+
+  throw new Error("Wails runtime bridge did not initialise in time");
+}
+
 async function bootstrap() {
+  await waitForWailsBridge();
   const config = await GetConfig();
   state.backends = config.backends;
   state.compressions = config.compressions;
