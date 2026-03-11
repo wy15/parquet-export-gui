@@ -6,13 +6,14 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"parquet-export-gui/core"
 	"path/filepath"
 	"strconv"
 	"strings"
 )
 
 func main() {
-	app := NewApp()
+	app := core.NewApp()
 	app.SetEmitter(printCLIEvent)
 
 	if err := runInteractiveCLI(app); err != nil {
@@ -21,7 +22,7 @@ func main() {
 	}
 }
 
-func runInteractiveCLI(app *App) error {
+func runInteractiveCLI(app *core.App) error {
 	reader := bufio.NewReader(os.Stdin)
 	config := app.GetConfig()
 	request := config.DefaultState
@@ -86,7 +87,7 @@ type menuOption struct {
 	Label string
 }
 
-func promptSelectBackend(reader *bufio.Reader, options []Option, defaultValue string) string {
+func promptSelectBackend(reader *bufio.Reader, options []core.Option, defaultValue string) string {
 	menu := make([]menuOption, 0, len(options))
 	for _, option := range options {
 		menu = append(menu, menuOption{Value: option.Value, Label: option.Label})
@@ -174,7 +175,7 @@ func databasePromptLabel(backend string) string {
 	}
 }
 
-func printCLIEvent(event TaskEvent) {
+func printCLIEvent(event core.TaskEvent) {
 	switch event.Type {
 	case "running":
 		if event.Message == "true" {

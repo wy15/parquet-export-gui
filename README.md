@@ -2,10 +2,10 @@
 
 一个使用 Go 开发的 Parquet 导出工具，用于把 Oracle（Thin 模式）、MySQL、PostgreSQL、MaxCompute 中的单表导出为本地 Parquet 文件。
 
-当前包含两个版本：
+当前包含两条发布线：
 
-- GUI 桌面版：基于 Wails，适合 Windows 10+ 和 macOS
-- CLI 命令行版：纯 Go 交互式终端界面，适合低版本 Windows 和 Linux 环境
+- 主线 GUI/CLI：基于 Go 1.24，GUI 使用 Wails，适合 Windows 10+ 和 macOS
+- `legacy-cli/`：为 Windows 7 / 8 兼容 CLI 准备的独立模块，当前已完成隔离并回退到旧依赖线，模块元数据已压到 `go 1.20`
 
 ## 功能
 
@@ -19,7 +19,8 @@
 
 ## 环境要求
 
-- Go 1.24+
+- 主线：Go 1.24+
+- `legacy-cli/`：目标为 Go 1.20.x，当前模块元数据已压到 Go 1.20，仍建议用真实 `go1.20.x` 工具链做最终发布
 - Node.js 18+
 - 请在目标平台本机执行构建
   - macOS 包需要在 macOS 上构建
@@ -89,7 +90,7 @@ macOS 交叉编译 Windows GUI `.exe`:
 ./scripts/build_windows_from_macos.sh
 ```
 
-macOS 交叉编译低版本 Windows CLI `.exe`:
+macOS 交叉编译主线 Windows CLI `.exe`:
 
 ```bash
 ./scripts/build_windows_cli_from_macos.sh
@@ -101,28 +102,35 @@ macOS 交叉编译 Linux x64 CLI:
 ./scripts/build_linux_cli_from_macos.sh
 ```
 
+macOS 交叉编译 Windows 7 / 8 兼容 CLI `.exe`（隔离发布线）:
+
+```bash
+./scripts/build_legacy_windows_cli_from_macos.sh
+```
+
 默认输出目录：
 
 - macOS: `dist/macos/Parquet Export Studio.app`
 - Windows GUI: `dist/windows/Parquet Export Studio.exe`
 - Windows CLI: `dist/windows-cli/Parquet Export Studio CLI.exe`
+- Windows 7/8 Legacy CLI: `dist/windows7-cli/Parquet Export Studio Legacy CLI.exe`
 - Linux CLI: `dist/linux-cli/parquet-export-studio-cli-linux-amd64`
 
 说明：
 
 - GUI 构建脚本直接使用 `npm run build` 和 `go build`，不依赖 Wails CLI
 - `build_windows_from_macos.sh` 只能在 macOS 上生成 GUI `.exe`，不包含 Windows 安装器或签名
-- `build_windows_cli_from_macos.sh` 不依赖 Wails / WebView2，可直接从 macOS 交叉编译纯命令行 `.exe`
+- `build_windows_cli_from_macos.sh` 不依赖 Wails / WebView2，但仍使用主线模块和 Go 1.24 依赖
+- `build_legacy_windows_cli_from_macos.sh` 面向 `legacy-cli/` 独立模块，Win7/8 正式发布时建议显式指定 `LEGACY_GO_BIN` 为真实 `go1.20.x`
 - `build_linux_cli_from_macos.sh` 不依赖 Wails / WebView2，可直接从 macOS 交叉编译 Linux x64 命令行可执行文件
 
 ## 目录结构
 
 ```text
-app.go
-native_export.go
+core/
 main.go
 main_cli.go
-app_desktop.go
+legacy-cli/
 frontend/
 build/
 scripts/
@@ -130,9 +138,11 @@ scripts/
   build_windows.ps1
   build_windows_from_macos.sh
   build_windows_cli_from_macos.sh
+  build_legacy_windows_cli_from_macos.sh
   build_linux_cli_from_macos.sh
 ```
 
 ## 限制
 
 - 当前版本按“整表导出”设计，不包含字段筛选和增量同步。
+- `legacy-cli/` 已经进入 Go 1.20 兼容验证阶段，但真正的发布版本仍需要用真实 `go1.20.x` 工具链和 Win7/8 真机再验证一轮。

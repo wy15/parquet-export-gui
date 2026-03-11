@@ -5,6 +5,8 @@ package main
 import (
 	"embed"
 
+	"parquet-export-gui/core"
+
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -14,7 +16,7 @@ import (
 var assets embed.FS
 
 func main() {
-	app := NewApp()
+	app := core.NewApp()
 
 	err := wails.Run(&options.App{
 		Title:     "Parquet Export Studio",
@@ -26,7 +28,7 @@ func main() {
 			Assets: assets,
 		},
 		BackgroundColour: &options.RGBA{R: 244, G: 251, B: 250, A: 1},
-		OnStartup:        app.startup,
+		OnStartup:        app.Startup,
 		Bind: []interface{}{
 			app,
 		},
