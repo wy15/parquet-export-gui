@@ -116,6 +116,19 @@ macOS 交叉编译 Windows 7 / 8 兼容 CLI `.exe`（隔离发布线）:
 - 脚本会优先使用 `.tmp/go-toolchains/go1.20.14/go/bin/go`
 - 如果未准备上述临时工具链，需要显式设置 `LEGACY_GO_BIN=/path/to/go1.20.x/bin/go`
 
+x86 平台编译：
+
+- Windows GUI / Windows CLI / Windows 7/8 Legacy CLI 默认使用 `WINDOWS_ARCH=amd64`
+- 如需编译 32 位 x86，可在运行脚本前设置 `WINDOWS_ARCH=386`
+
+```bash
+WINDOWS_ARCH=386 ./scripts/build_windows_from_macos.sh
+WINDOWS_ARCH=386 ./scripts/build_windows_cli_from_macos.sh
+WINDOWS_ARCH=386 LEGACY_GO_BIN=/path/to/go1.20.x/bin/go ./scripts/build_legacy_windows_cli_from_macos.sh
+```
+
+- `build_linux_cli_from_macos.sh` 当前固定输出 Linux `amd64`，不支持通过环境变量切换到 x86
+
 默认输出目录：
 
 - macOS: `dist/macos/Parquet Export Studio.app`
