@@ -215,6 +215,10 @@ func printCLIEvent(event TaskEvent) {
 		}
 	case "log":
 		fmt.Printf("[%s] %s\n", event.Kind, event.Message)
+	case "progress":
+		if event.Kind == "export" {
+			fmt.Printf("[%s] 进度：已写入 %d 行\n", event.Kind, event.RowsWritten)
+		}
 	case "error":
 		fmt.Printf("[%s] 错误: %s\n", event.Kind, event.Error)
 	case "success":

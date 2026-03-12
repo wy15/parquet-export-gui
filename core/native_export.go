@@ -220,6 +220,7 @@ func (a *App) exportSQLTableToParquet(request ExportRequest, outputPath string) 
 				return exportResult{}, err
 			}
 			totalRows += batchRows
+			a.emit(TaskEvent{Kind: "export", Type: "progress", RowsWritten: totalRows})
 			a.emit(TaskEvent{Kind: "export", Type: "log", Message: fmt.Sprintf("已写入 %s 行", formatRows(totalRows))})
 			batchRows = 0
 		}
@@ -234,6 +235,7 @@ func (a *App) exportSQLTableToParquet(request ExportRequest, outputPath string) 
 			return exportResult{}, err
 		}
 		totalRows += batchRows
+		a.emit(TaskEvent{Kind: "export", Type: "progress", RowsWritten: totalRows})
 		a.emit(TaskEvent{Kind: "export", Type: "log", Message: fmt.Sprintf("已写入 %s 行", formatRows(totalRows))})
 	}
 
@@ -301,6 +303,11 @@ func (a *App) exportMaxComputeTableToParquet(request ExportRequest, outputPath s
 		}
 
 		totalRows += batchRows
+		a.emit(TaskEvent{
+			Kind:        "export",
+			Type:        "progress",
+			RowsWritten: totalRows,
+		})
 		a.emit(TaskEvent{
 			Kind:    "export",
 			Type:    "log",

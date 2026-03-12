@@ -20,6 +20,7 @@ const state = {
   generatedFiles: [],
   selectedFiles: [],
   selectionInitialized: false,
+  logsExpanded: false,
   zipEnabled: false,
   zipPassword: "",
   visibility: {
@@ -50,6 +51,7 @@ const state = {
 let noticeTimer = null;
 let lastRenderedLogCount = 0;
 let stickLogToBottom = true;
+let initialRender = true;
 
 function getAppBinding() {
   const appBinding = window.go?.main?.App || window.go?.core?.App;
@@ -80,24 +82,25 @@ function CreateZipArchive(request) {
 }
 
 function render() {
+  const enterClass = initialRender ? "is-entering" : "";
   appRoot.innerHTML = `
-    <div class="page-shell">
+    <div class="page-shell ${enterClass}">
       <section class="hero-card">
         <div class="hero-bar">
           <div>
             <h1>Parquet Export Studio</h1>
             <p class="hero-copy">从 Oracle / MySQL / PostgreSQL / MaxCompute 导出单表到本地 Parquet</p>
-            <p class="hero-hint">${backendHint()}</p>
           </div>
           <div class="hero-metrics">
-            <div class="hero-status">${escapeHtml(state.status)}</div>
+            <div class="hero-status"><span class="hero-status-dot ${state.running ? "is-running" : ""}"></span>${escapeHtml(state.status)}</div>
             <div class="hero-rows">已写入 ${numberWithCommas(state.rowsWritten)} 行</div>
+            ${state.running ? '<div class="hero-progress"><div class="hero-progress-bar"></div></div>' : ""}
           </div>
         </div>
 
         <div class="panel-grid">
           <section class="panel panel-left">
-            <h2>连接配置</h2>
+            ${renderSectionTitle("连接配置")}
             ${renderFieldShell("数据源", `<select id="backend">${renderBackendOptions()}</select>`, "field-select")}
             ${renderConnectionFields()}
             ${renderObjectFields()}
@@ -105,7 +108,7 @@ function render() {
 
           <div class="panel-stack">
             <section class="panel">
-              <h2>导出参数</h2>
+              ${renderSectionTitle("导出参数")}
               ${renderFieldShell("输出 Parquet 路径", `<input id="outputPath" value="${escapeAttr(state.form.outputPath)}" />`)}
               <div class="field-row">
                 <div class="grow">
@@ -115,20 +118,32 @@ function render() {
                   ${renderFieldShell("压缩", `<select id="compression">${renderCompressionOptions()}</select>`, "field-select")}
                 </div>
               </div>
-              <p class="panel-note">当数据量大时，可以适当调整批次大小。</p>
+              <p class="panel-note">单次写入的行数。调大更快，调小更省内存。</p>
               <div class="button-row">
                 <button id="testButton" class="button button-secondary" ${state.running ? "disabled" : ""}>测试连接</button>
-                <button id="exportButton" class="button button-primary" ${state.running ? "disabled" : ""}>开始导出</button>
+                <button id="exportButton" class="button button-primary" ${state.running ? "disabled" : ""}><span class="button-icon">▶</span>开始导出</button>
+              </div>
+            </section>
+
+            <section class="panel panel-log">
+              <button type="button" class="panel-toggle" id="logToggle" aria-expanded="${state.logsExpanded ? "true" : "false"}">
+                <span class="panel-toggle-copy">
+                  <span class="panel-toggle-eyebrow">调试输出</span>
+                  <span class="panel-toggle-title">运行日志</span>
+                </span>
+                <span class="panel-toggle-meta">
+                  <span class="log-badge">${state.logs.length}</span>
+                  <span class="panel-toggle-state">${state.logsExpanded ? "收起" : "展开"}</span>
+                  <svg class="panel-chevron ${state.logsExpanded ? "is-open" : ""}" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M3.5 5.25L7 8.75L10.5 5.25" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </span>
+              </button>
+              <div class="log-collapse ${state.logsExpanded ? "is-open" : ""}">
+                <textarea id="logView" readonly placeholder="日志会显示在这里" aria-label="运行日志">${escapeHtml(state.logs.join("\n"))}</textarea>
               </div>
             </section>
 
             <section class="panel">
-              <h2>运行日志</h2>
-              <textarea id="logView" readonly placeholder="日志会显示在这里">${escapeHtml(state.logs.join("\n"))}</textarea>
-            </section>
-
-            <section class="panel">
-              <h2>本次生成的 Parquet</h2>
+              ${renderSectionTitle("本次生成的 Parquet")}
               ${renderGeneratedFilesPanel()}
             </section>
           </div>
@@ -141,6 +156,14 @@ function render() {
 
   bindInputs();
   syncLogScroll();
+
+  if (initialRender) {
+    initialRender = false;
+    setTimeout(() => {
+      const shell = document.querySelector(".page-shell");
+      if (shell) shell.classList.remove("is-entering");
+    }, 500);
+  }
 }
 
 function bindInputs() {
@@ -197,6 +220,7 @@ function bindInputs() {
   bindGeneratedFilesActions();
   bindExportConflictActions();
   bindLogScrollTracking();
+  bindLogToggle();
 }
 
 async function startTask(kind) {
@@ -260,6 +284,11 @@ function installEventBridge() {
         break;
       case "log":
         appendLog(event.message);
+        break;
+      case "progress":
+        if (event.kind === "export") {
+          state.rowsWritten = event.rowsWritten;
+        }
         break;
       case "success":
         if (event.kind === "export") {
@@ -421,7 +450,7 @@ function renderGeneratedFilesPanel() {
   return `
     <div class="generated-toolbar">
       <label class="list-checkbox master-checkbox">
-        <input id="selectAllGenerated" type="checkbox" ${allSelected ? "checked" : ""} ${state.generatedFiles.length === 0 ? "disabled" : ""} />
+        <input id="selectAllGenerated" type="checkbox" ${allSelected ? "checked" : ""} ${state.generatedFiles.length === 0 ? "disabled" : ""} aria-label="全选文件" />
         <span>全选文件</span>
       </label>
       <span class="generated-meta">已选 ${selectedCount} / ${state.generatedFiles.length}</span>
@@ -460,14 +489,25 @@ function renderGeneratedFileItem(file) {
   `;
 }
 
+function renderSectionTitle(label) {
+  return `
+    <h2 class="section-title">
+      <span class="section-title-mark" aria-hidden="true"></span>
+      <span>${escapeHtml(label)}</span>
+    </h2>
+  `;
+}
+
 function renderFieldShell(label, control, extraClass = "", visibilityKey = "") {
   const className = ["field", extraClass].filter(Boolean).join(" ");
   const toggle = visibilityKey ? renderVisibilityToggle(visibilityKey) : "";
   return `
     <label class="${className}">
-      <span>${escapeHtml(label)}</span>
-      ${control}
-      ${toggle}
+      <span class="field-label">${escapeHtml(label)}</span>
+      <span class="field-frame">
+        ${control}
+        ${toggle}
+      </span>
     </label>
   `;
 }
@@ -664,6 +704,18 @@ function bindLogScrollTracking() {
   logView.addEventListener("scroll", () => {
     const distanceToBottom = logView.scrollHeight - logView.scrollTop - logView.clientHeight;
     stickLogToBottom = distanceToBottom < 12;
+  });
+}
+
+function bindLogToggle() {
+  const toggle = document.querySelector("#logToggle");
+  if (!toggle) {
+    return;
+  }
+
+  toggle.addEventListener("click", () => {
+    state.logsExpanded = !state.logsExpanded;
+    render();
   });
 }
 
