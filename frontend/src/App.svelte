@@ -45,7 +45,6 @@
   let backends: Option[] = [];
   let compressions: string[] = [];
   let defaultPorts: Record<string, number> = {};
-  let backendHints: Record<string, string> = {};
   let running = false;
   let zipBusy = false;
   let rowsWritten = 0;
@@ -91,7 +90,6 @@
   let stickLogToBottom = true;
 
   $: isMaxCompute = form.backend === "maxcompute";
-  $: backendHint = backendHints[form.backend] ?? "";
   $: allSelected = generatedFiles.length > 0 && selectedFiles.length === generatedFiles.length;
   $: selectedCount = selectedFiles.length;
 
@@ -126,7 +124,6 @@
         backends = config.backends ?? [];
         compressions = config.compressions ?? [];
         defaultPorts = config.defaultPorts ?? {};
-        backendHints = config.backendHints ?? {};
         form = {
           ...form,
           ...config.defaultState,
@@ -499,9 +496,6 @@
           <p class="hero-copy">
             从 Oracle / MySQL / PostgreSQL / MaxCompute 导出单表到本地 Parquet
           </p>
-          {#if backendHint}
-            <p class="hero-hint">{backendHint}</p>
-          {/if}
         </div>
         <div class="hero-metrics">
           <div class="hero-status">
@@ -999,14 +993,9 @@
     font-weight: 800;
   }
 
-  .hero-copy,
-  .hero-hint {
+  .hero-copy {
     margin: 10px 0 0;
     font-size: 15px;
-  }
-
-  .hero-hint {
-    color: var(--primary);
   }
 
   .panel-note {
@@ -1100,7 +1089,7 @@
 
   .panel-stack {
     display: grid;
-    gap: 22px;
+    gap: 8px;
   }
 
   .panel {
