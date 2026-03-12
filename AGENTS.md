@@ -22,14 +22,16 @@ wails dev
 - GUI 入口走根目录 `main.go`
 - GUI 生产构建走 `wails build`
 - `frontend/dist` 仍然会在生产构建时被 embed 到桌面程序中
+- `build_release_matrix.sh` 会集中产出 GUI、主线 CLI、Legacy CLI 的发布包；当前 `windows/arm64` CLI 默认跳过 UPX 压缩
 
 构建脚本在 `scripts/`：
 
+- 全量发布矩阵：`./scripts/build_release_matrix.sh`
 - macOS GUI：`./scripts/build_macos.sh`
-- Windows GUI：`./scripts/build_windows.ps1`
 - macOS 交叉编译 Windows GUI：`./scripts/build_windows_from_macos.sh`
 - macOS 交叉编译 Windows CLI：`./scripts/build_windows_cli_from_macos.sh`
 - macOS 交叉编译 Linux CLI：`./scripts/build_linux_cli_from_macos.sh`
+- macOS 交叉编译 Windows 7 / 8 Legacy CLI：`./scripts/build_legacy_windows_cli_from_macos.sh`
 
 ## 代码结构
 

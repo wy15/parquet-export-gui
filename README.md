@@ -27,40 +27,6 @@
   - macOS GUI 需要在 macOS 上构建
   - Windows GUI / CLI 与 Linux CLI 通过 macOS 交叉编译生成
 
-## 安装
-
-```bash
-cd frontend && npm install
-go install github.com/wailsapp/wails/v2/cmd/wails@latest
-```
-
-## 启动
-
-CLI:
-
-```bash
-go run ./cmd/cli
-```
-
-Legacy CLI:
-
-```bash
-cd legacy-cli
-go run .
-```
-
-GUI 开发:
-
-```bash
-wails dev
-```
-
-GUI 构建:
-
-```bash
-wails build -clean -o "Parquet Export Studio"
-```
-
 ## 使用说明
 
 1. 选择数据源类型。
@@ -124,7 +90,16 @@ GUI 构建产物：
 
 - `wails build` 默认输出到 `build/bin/`
 - `scripts/build.sh`、`scripts/build_macos.sh`、`scripts/build_windows_from_macos.sh` 都是对 `wails build` 的薄封装
-- `scripts/build_release_matrix.sh` 会产出 1 个 macOS GUI、5 个主线/Legacy CLI 和 2 个 Windows GUI/CLI 版本，并对支持的 Windows 与 Linux CLI/GUI 产物执行 `upx --best --lzma`
+- `scripts/build_release_matrix.sh` 会产出以下 8 个目标：
+  - macOS GUI
+  - Windows GUI x64
+  - Windows CLI x64
+  - Windows CLI arm64
+  - Linux CLI amd64
+  - Linux CLI arm64
+  - Legacy CLI x64
+  - Legacy CLI x86
+- 对支持的 Windows 与 Linux CLI/GUI 产物执行 `upx --best --lzma`
 - 当前默认跳过 `windows/arm64` CLI 的 UPX 压缩，因为本机使用的 `UPX 5.1.1` 不支持 `win64/arm64`
 
 CLI / Legacy CLI 运行前提：
@@ -154,6 +129,12 @@ WINDOWS_ARCH=386 LEGACY_GO_BIN=/path/to/go1.20.x/bin/go ./scripts/build_legacy_w
 - Windows CLI: `dist/windows-cli/Parquet Export Studio CLI.exe`
 - Windows 7/8 Legacy CLI: `dist/windows7-cli/Parquet Export Studio Legacy CLI.exe`
 - Linux CLI: `dist/linux-cli/parquet-export-studio-cli-linux-amd64`
+- Release Matrix: `dist/release/`
+  - `dist/release/macos/`
+  - `dist/release/windows-gui/`
+  - `dist/release/windows-cli/`
+  - `dist/release/linux-cli/`
+  - `dist/release/windows-legacy-cli/`
 
 说明：
 
@@ -178,6 +159,7 @@ frontend/
 build/
 scripts/
   build.sh
+  build_release_matrix.sh
   build_macos.sh
   build_windows_from_macos.sh
   build_windows_cli_from_macos.sh
