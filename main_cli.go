@@ -69,16 +69,22 @@ func runInteractiveCLI(app *core.App) error {
 		{Value: "test_export", Label: "先测试连接再导出"},
 	}, "test_export")
 
-	switch action {
-	case "test":
-		return app.RunTaskSync("test", request)
-	case "export":
-		return app.RunTaskSync("export", request)
-	default:
-		if err := app.RunTaskSync("test", request); err != nil {
+	for {
+		if err := runCLIAction(app, action, request); err != nil {
 			return err
 		}
-		return app.RunTaskSync("export", request)
+
+		if action == "test" {
+			return nil
+		}
+
+		nextTable := promptNextTable(reader)
+		if nextTable == "" {
+			return nil
+		}
+
+		request.Table = nextTable
+		request.OutputPath = promptOutputPath(reader, request.OutputPath, request.Table)
 	}
 }
 
@@ -134,6 +140,31 @@ func promptOutputPath(reader *bufio.Reader, defaultPath, table string) string {
 		suggested = filepath.Join(filepath.Dir(defaultPath), fileName)
 	}
 	return promptString(reader, "输出文件路径", suggested)
+}
+
+func promptNextTable(reader *bufio.Reader) string {
+	fmt.Print("下一张表名（留空退出）: ")
+
+	text, err := reader.ReadString('\n')
+	if err != nil {
+		return ""
+	}
+
+	return strings.TrimSpace(text)
+}
+
+func runCLIAction(app *core.App, action string, request core.ExportRequest) error {
+	switch action {
+	case "test":
+		return app.RunTaskSync("test", request)
+	case "export":
+		return app.RunTaskSync("export", request)
+	default:
+		if err := app.RunTaskSync("test", request); err != nil {
+			return err
+		}
+		return app.RunTaskSync("export", request)
+	}
 }
 
 func promptString(reader *bufio.Reader, label, defaultValue string) string {
