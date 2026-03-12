@@ -1,11 +1,7 @@
-//go:build desktop
-
 package main
 
 import (
 	"embed"
-
-	"parquet-export-gui/core"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -16,7 +12,7 @@ import (
 var assets embed.FS
 
 func main() {
-	app := core.NewApp()
+	app := NewApp()
 
 	err := wails.Run(&options.App{
 		Title:     "Parquet Export Studio",

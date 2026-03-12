@@ -25,7 +25,7 @@ go build \
   -trimpath \
   -ldflags "-w -s" \
   -o "$BUILD_OUTPUT" \
-  .
+  ./cmd/cli
 
 echo "Windows CLI cross-build finished: $BUILD_OUTPUT"
 echo "This build excludes Wails/WebView2 and is intended for lower-version Windows environments."

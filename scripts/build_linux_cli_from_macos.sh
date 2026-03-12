@@ -24,7 +24,7 @@ go build \
   -trimpath \
   -ldflags "-w -s" \
   -o "$BUILD_OUTPUT" \
-  .
+  ./cmd/cli
 
 chmod +x "$BUILD_OUTPUT"
 

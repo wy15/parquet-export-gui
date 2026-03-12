@@ -1,0 +1,14 @@
+node_modules
+dist
+.svelte-kit
+
+# Package Managers
+package-lock.json
+pnpm-lock.yaml
+pnpm-workspace.yaml
+yarn.lock
+bun.lock
+bun.lockb
+
+# Wails Generated Files
+wailsjs/

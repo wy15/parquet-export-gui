@@ -1,19 +1,17 @@
-//go:build !desktop
-
 package main
 
 import (
 	"bufio"
 	"fmt"
 	"os"
-	"parquet-export-gui/core"
+	"parquet-export-gui/internal/appcore"
 	"path/filepath"
 	"strconv"
 	"strings"
 )
 
 func main() {
-	app := core.NewApp()
+	app := appcore.NewApp()
 	app.SetEmitter(printCLIEvent)
 
 	if err := runInteractiveCLI(app); err != nil {
@@ -22,7 +20,7 @@ func main() {
 	}
 }
 
-func runInteractiveCLI(app *core.App) error {
+func runInteractiveCLI(app *appcore.App) error {
 	reader := bufio.NewReader(os.Stdin)
 	config := app.GetConfig()
 	request := config.DefaultState
@@ -93,7 +91,7 @@ type menuOption struct {
 	Label string
 }
 
-func promptSelectBackend(reader *bufio.Reader, options []core.Option, defaultValue string) string {
+func promptSelectBackend(reader *bufio.Reader, options []appcore.Option, defaultValue string) string {
 	menu := make([]menuOption, 0, len(options))
 	for _, option := range options {
 		menu = append(menu, menuOption{Value: option.Value, Label: option.Label})
@@ -153,7 +151,7 @@ func promptNextTable(reader *bufio.Reader) string {
 	return strings.TrimSpace(text)
 }
 
-func runCLIAction(app *core.App, action string, request core.ExportRequest) error {
+func runCLIAction(app *appcore.App, action string, request appcore.ExportRequest) error {
 	switch action {
 	case "test":
 		return app.RunTaskSync("test", request)
@@ -206,7 +204,7 @@ func databasePromptLabel(backend string) string {
 	}
 }
 
-func printCLIEvent(event core.TaskEvent) {
+func printCLIEvent(event appcore.TaskEvent) {
 	switch event.Type {
 	case "running":
 		if event.Message == "true" {

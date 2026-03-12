@@ -1,4 +1,4 @@
-export namespace main {
+export namespace appcore {
 	
 	export class ExportRequest {
 	    backend: string;
@@ -42,40 +42,6 @@ export namespace main {
 	        this.maxcomputeAccessId = source["maxcomputeAccessId"];
 	        this.maxcomputeAccessKey = source["maxcomputeAccessKey"];
 	        this.partitionSpec = source["partitionSpec"];
-	    }
-	}
-	export class ExportOutputCheck {
-	    exists: boolean;
-	    resolvedPath: string;
-	    suggestedPath: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new ExportOutputCheck(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.exists = source["exists"];
-	        this.resolvedPath = source["resolvedPath"];
-	        this.suggestedPath = source["suggestedPath"];
-	    }
-	}
-	export class GeneratedFile {
-	    path: string;
-	    name: string;
-	    size: number;
-	    createdAt: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new GeneratedFile(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.path = source["path"];
-	        this.name = source["name"];
-	        this.size = source["size"];
-	        this.createdAt = source["createdAt"];
 	    }
 	}
 	export class Option {
@@ -130,6 +96,42 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class ExportOutputCheck {
+	    exists: boolean;
+	    resolvedPath: string;
+	    suggestedPath: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ExportOutputCheck(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.exists = source["exists"];
+	        this.resolvedPath = source["resolvedPath"];
+	        this.suggestedPath = source["suggestedPath"];
+	    }
+	}
+	
+	export class GeneratedFile {
+	    path: string;
+	    name: string;
+	    size: number;
+	    createdAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new GeneratedFile(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.name = source["name"];
+	        this.size = source["size"];
+	        this.createdAt = source["createdAt"];
+	    }
+	}
+	
 	export class ZipRequest {
 	    files: string[];
 	    password: string;
@@ -158,6 +160,6 @@ export namespace main {
 	        this.fileCount = source["fileCount"];
 	    }
 	}
-	
 
 }
+

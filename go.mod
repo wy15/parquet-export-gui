@@ -18,7 +18,7 @@ require (
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
-	github.com/alexmullins/zip v0.0.0-20180717182244-4affb64b04d0 // indirect
+	github.com/alexmullins/zip v0.0.0-20180717182244-4affb64b04d0
 	github.com/alibabacloud-go/debug v1.0.1 // indirect
 	github.com/alibabacloud-go/tea v1.2.2 // indirect
 	github.com/aliyun/credentials-go v1.3.10 // indirect

@@ -1,6 +1,4 @@
-//go:build desktop
-
-package core
+package main
 
 import (
 	"context"
@@ -9,7 +7,7 @@ import (
 )
 
 func (a *App) Startup(ctx context.Context) {
-	a.SetEmitter(func(event TaskEvent) {
+	a.core.SetEmitter(func(event TaskEvent) {
 		wruntime.EventsEmit(ctx, "task:event", event)
 	})
 }

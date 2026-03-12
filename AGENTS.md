@@ -7,22 +7,21 @@
 CLI（交互式终端）：
 
 ```bash
-go run .
+go run ./cmd/cli
 ```
 
 GUI（Wails，桌面）：
 
 ```bash
 cd frontend && npm install
-cd frontend && npm run build
-cd ..
-go run -tags desktop .
+wails dev
 ```
 
 说明：
 
-- GUI 入口走 `main.go`，仅在 `desktop` build tag 下生效
-- GUI 启动前需要先构建 `frontend/dist`，因为 Go 会将其 embed 到桌面程序中
+- GUI 入口走根目录 `main.go`
+- GUI 生产构建走 `wails build`
+- `frontend/dist` 仍然会在生产构建时被 embed 到桌面程序中
 
 构建脚本在 `scripts/`：
 
@@ -34,16 +33,18 @@ go run -tags desktop .
 
 ## 代码结构
 
-- Go 入口：`main.go`（默认 CLI）、`main_cli.go`（CLI UI）、`app.go` / `app_desktop.go`（GUI/Wails）
-- 导出核心：`native_export.go`
+- Go 入口：`main.go`（GUI/Wails）、`cmd/cli/main.go`（CLI）
+- 桌面绑定包装：`app.go` / `app_desktop.go`
+- 导出核心：`internal/appcore/`
 - 前端（Wails）：`frontend/`（构建后产物进入 `frontend/dist`）
-- 构建产物：`dist/`
+- GUI 构建产物：`build/bin/`
+- CLI 构建产物：`dist/`
 
 ## 修改约定
 
 - 如果任务涉及 GUI，请同时检查 `app.go`、`app_desktop.go` 与 `frontend/` 的接口契约（导出方法、事件名、参数结构、JSON 字段）。
-- 如果任务涉及 CLI，请优先修改 `main.go` / `main_cli.go`，避免引入 Wails 依赖。
-- 导出逻辑尽量集中在 `native_export.go`，避免在 UI 层实现导出细节。
+- 如果任务涉及 CLI，请优先修改 `cmd/cli/`，避免引入 Wails 依赖。
+- 导出逻辑尽量集中在 `internal/appcore/`，避免在 UI 层实现导出细节。
 
 ## 测试与验证
 
