@@ -139,11 +139,11 @@ build_legacy_cli() {
 build_macos_gui
 build_windows_gui
 build_cross_cli windows amd64 "$WINDOWS_CLI_DIR/$WINDOWS_CLI_X64_NAME"
-compress_with_upx "$WINDOWS_CLI_DIR/$WINDOWS_CLI_X64_NAME"
+# compress_with_upx "$WINDOWS_CLI_DIR/$WINDOWS_CLI_X64_NAME"
 build_cross_cli linux amd64 "$LINUX_CLI_DIR/$LINUX_CLI_X64_NAME"
-compress_with_upx "$LINUX_CLI_DIR/$LINUX_CLI_X64_NAME"
+# compress_with_upx "$LINUX_CLI_DIR/$LINUX_CLI_X64_NAME"
 build_cross_cli linux arm64 "$LINUX_CLI_DIR/$LINUX_CLI_ARM64_NAME"
-compress_with_upx "$LINUX_CLI_DIR/$LINUX_CLI_ARM64_NAME"
+# compress_with_upx "$LINUX_CLI_DIR/$LINUX_CLI_ARM64_NAME"
 build_legacy_cli amd64 "$LEGACY_X64_NAME"
 build_legacy_cli 386 "$LEGACY_X86_NAME"
 build_cross_cli windows arm64 "$WINDOWS_CLI_DIR/$WINDOWS_CLI_ARM64_NAME"
