@@ -35,7 +35,7 @@ func runInteractiveCLI(app *appcore.App) error {
 	}
 
 	if request.Backend == "maxcompute" {
-		request.MaxComputeEndpoint = promptString(reader, "MaxCompute Endpoint", "https://service.cn-hangzhou.maxcompute.aliyun.com/api")
+		request.MaxComputeEndpoint = promptString(reader, "MaxCompute Endpoint", "http://service.cn-jilin-jlyb-d01.odps.ops.jl.hsip.gov.cn/api")
 		request.MaxComputeProject = promptString(reader, "Project", "")
 		request.MaxComputeAccessID = promptString(reader, "Access ID", "")
 		request.MaxComputeAccessKey = promptString(reader, "Access Key", "")
