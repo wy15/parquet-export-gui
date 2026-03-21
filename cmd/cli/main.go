@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"parquet-export-gui/internal/appcore"
@@ -9,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 )
+
+var errExportCancelled = errors.New("export cancelled")
 
 func main() {
 	app := appcore.NewApp()
@@ -43,16 +46,30 @@ func runInteractiveCLI(app *appcore.App) error {
 		request.Table = promptString(reader, "Table", "")
 		request.PartitionSpec = promptString(reader, "Partition Spec（可选）", "")
 	} else {
+		if request.Backend == "oracle" {
+			request.ExportMode = promptSelect(reader, "导出模式", []menuOption{
+				{Value: "table", Label: "单表导出"},
+				{Value: "schema", Label: "按 Schema 导出全部表"},
+			}, request.ExportMode)
+		} else {
+			request.ExportMode = "table"
+		}
+
 		request.Host = promptString(reader, "Host", "127.0.0.1")
 		request.Port = promptInt(reader, "Port", request.Port)
 		request.Username = promptString(reader, "Username", "")
 		request.Password = promptString(reader, "Password", "")
 		request.Database = promptString(reader, databasePromptLabel(request.Backend), "")
-		request.Schema = promptString(reader, "Schema（可选）", "")
-		request.Table = promptString(reader, "Table", "")
+		if request.Backend == "oracle" && request.ExportMode == "schema" {
+			request.Schema = promptString(reader, "Schema", "")
+			request.Table = ""
+		} else {
+			request.Schema = promptString(reader, "Schema（可选）", "")
+			request.Table = promptString(reader, "Table", "")
+		}
 	}
 
-	request.OutputPath = promptOutputPath(reader, request.OutputPath, request.Table)
+	request.OutputPath = promptOutputPath(reader, request)
 	request.ConflictPolicy = promptSelect(reader, "文件冲突策略", []menuOption{
 		{Value: "rename", Label: "自动重命名"},
 		{Value: "overwrite", Label: "覆盖已有文件"},
@@ -68,11 +85,14 @@ func runInteractiveCLI(app *appcore.App) error {
 	}, "test_export")
 
 	for {
-		if err := runCLIAction(app, action, request); err != nil {
+		if err := runCLIAction(reader, app, action, request); err != nil {
+			if errors.Is(err, errExportCancelled) {
+				return nil
+			}
 			return err
 		}
 
-		if action == "test" {
+		if action == "test" || isOracleSchemaExport(request) {
 			return nil
 		}
 
@@ -82,7 +102,7 @@ func runInteractiveCLI(app *appcore.App) error {
 		}
 
 		request.Table = nextTable
-		request.OutputPath = promptOutputPath(reader, request.OutputPath, request.Table)
+		request.OutputPath = promptOutputPath(reader, request)
 	}
 }
 
@@ -131,11 +151,22 @@ func promptSelect(reader *bufio.Reader, title string, options []menuOption, defa
 	}
 }
 
-func promptOutputPath(reader *bufio.Reader, defaultPath, table string) string {
-	suggested := defaultPath
-	if strings.TrimSpace(table) != "" {
-		fileName := strings.TrimSpace(table) + ".parquet"
-		suggested = filepath.Join(filepath.Dir(defaultPath), fileName)
+func promptOutputPath(reader *bufio.Reader, request appcore.ExportRequest) string {
+	suggested := strings.TrimSpace(request.OutputPath)
+	if isOracleSchemaExport(request) {
+		if suggested == "" {
+			suggested = "schema-export"
+		}
+		schemaName := strings.TrimSpace(request.Schema)
+		if schemaName != "" {
+			suggested = filepath.Join(filepath.Dir(suggested), schemaName)
+		}
+		return promptString(reader, "输出目录路径", suggested)
+	}
+
+	if strings.TrimSpace(request.Table) != "" {
+		fileName := strings.TrimSpace(request.Table) + ".parquet"
+		suggested = filepath.Join(filepath.Dir(suggested), fileName)
 	}
 	return promptString(reader, "输出文件路径", suggested)
 }
@@ -151,17 +182,66 @@ func promptNextTable(reader *bufio.Reader) string {
 	return strings.TrimSpace(text)
 }
 
-func runCLIAction(app *appcore.App, action string, request appcore.ExportRequest) error {
+func runCLIAction(reader *bufio.Reader, app *appcore.App, action string, request appcore.ExportRequest) error {
 	switch action {
 	case "test":
 		return app.RunTaskSync("test", request)
 	case "export":
+		confirmed, err := confirmBulkOracleSchemaExport(reader, app, request)
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			return errExportCancelled
+		}
 		return app.RunTaskSync("export", request)
 	default:
 		if err := app.RunTaskSync("test", request); err != nil {
 			return err
 		}
+		confirmed, err := confirmBulkOracleSchemaExport(reader, app, request)
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			return errExportCancelled
+		}
 		return app.RunTaskSync("export", request)
+	}
+}
+
+func confirmBulkOracleSchemaExport(
+	reader *bufio.Reader,
+	app *appcore.App,
+	request appcore.ExportRequest,
+) (bool, error) {
+	if !isOracleSchemaExport(request) {
+		return true, nil
+	}
+
+	preview, err := app.PreviewExport(request)
+	if err != nil {
+		return false, err
+	}
+	if preview.TableCount <= 10 {
+		return true, nil
+	}
+
+	fmt.Fprintf(
+		os.Stdout,
+		"Schema %s 下共有 %d 张表，将全部导出。是否继续？[y/N]: ",
+		strings.TrimSpace(preview.Schema),
+		preview.TableCount,
+	)
+	text, err := reader.ReadString('\n')
+	if err != nil {
+		return false, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(text)) {
+	case "y", "yes":
+		return true, nil
+	default:
+		return false, nil
 	}
 }
 
@@ -202,6 +282,11 @@ func databasePromptLabel(backend string) string {
 	default:
 		return "Database"
 	}
+}
+
+func isOracleSchemaExport(request appcore.ExportRequest) bool {
+	return strings.EqualFold(strings.TrimSpace(request.Backend), "oracle") &&
+		strings.EqualFold(strings.TrimSpace(request.ExportMode), "schema")
 }
 
 func printCLIEvent(event appcore.TaskEvent) {

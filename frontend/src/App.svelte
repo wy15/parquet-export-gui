@@ -7,10 +7,12 @@
     CreateZipArchive,
     GetConfig,
     GetGeneratedFiles,
+    PreviewExport,
     StartTask,
   } from "../wailsjs/go/main/App";
 
   type ExportRequest = appcore.ExportRequest;
+  type ExportPreview = appcore.ExportPreview;
   type GeneratedFile = appcore.GeneratedFile;
   type Option = appcore.Option;
 
@@ -33,6 +35,12 @@
     suggestedPath: string;
   };
 
+  type SchemaExportConfirmationState = {
+    request: ExportRequest;
+    schema: string;
+    tableCount: number;
+  };
+
   type TaskEvent = {
     kind: string;
     type: string;
@@ -52,6 +60,7 @@
   let logs: string[] = [];
   let notice: NoticeState | null = null;
   let exportConflict: ExportConflictState | null = null;
+  let schemaExportConfirmation: SchemaExportConfirmationState | null = null;
   let generatedFiles: GeneratedFile[] = [];
   let selectedFiles: string[] = [];
   let selectionInitialized = false;
@@ -65,6 +74,7 @@
   };
   let form: ExportRequest = {
     backend: "oracle",
+    exportMode: "table",
     outputPath: "",
     conflictPolicy: "",
     table: "",
@@ -89,7 +99,9 @@
   let lastRenderedLogCount = 0;
   let stickLogToBottom = true;
 
+  $: isOracle = form.backend === "oracle";
   $: isMaxCompute = form.backend === "maxcompute";
+  $: isOracleSchemaMode = isOracle && form.exportMode === "schema";
   $: allSelected = generatedFiles.length > 0 && selectedFiles.length === generatedFiles.length;
   $: selectedCount = selectedFiles.length;
 
@@ -202,9 +214,27 @@
 
   function handleBackendChange(event: Event) {
     const backend = (event.currentTarget as HTMLSelectElement).value;
+    const exportMode = backend === "oracle" ? form.exportMode || "table" : "table";
     updateForm({
       backend,
+      exportMode,
       port: defaultPorts[backend] ?? 0,
+    });
+  }
+
+  function handleExportModeChange(event: Event) {
+    const exportMode = (event.currentTarget as HTMLSelectElement).value;
+    if (exportMode === "schema") {
+      updateForm({
+        exportMode,
+        outputPath: replaceOutputDirectory(form.outputPath, form.schema),
+      });
+      return;
+    }
+
+    updateForm({
+      exportMode,
+      outputPath: replaceOutputFilename(form.outputPath, form.table),
     });
   }
 
@@ -212,7 +242,19 @@
     const table = (event.currentTarget as HTMLInputElement).value;
     updateForm({
       table,
-      outputPath: replaceOutputFilename(form.outputPath, table),
+      outputPath: isOracleSchemaMode
+        ? form.outputPath
+        : replaceOutputFilename(form.outputPath, table),
+    });
+  }
+
+  function handleSchemaInput(event: Event) {
+    const schema = (event.currentTarget as HTMLInputElement).value;
+    updateForm({
+      schema,
+      outputPath: isOracleSchemaMode
+        ? replaceOutputDirectory(form.outputPath, schema)
+        : form.outputPath,
     });
   }
 
@@ -252,22 +294,17 @@
     const request = sanitizeRequest();
 
     try {
-      const check = await CheckExportOutput(request.outputPath);
-      if (check.exists) {
-        exportConflict = {
+      const preview = await PreviewExport(request);
+      if (preview.requiresConfirmation) {
+        schemaExportConfirmation = {
           request,
-          resolvedPath: check.resolvedPath,
-          suggestedPath: check.suggestedPath,
+          schema: preview.schema || request.schema,
+          tableCount: preview.tableCount,
         };
         return;
       }
 
-      updateForm({ outputPath: check.resolvedPath });
-      await StartTask("export", {
-        ...request,
-        outputPath: check.resolvedPath,
-        conflictPolicy: "overwrite",
-      });
+      await runExport(request, preview);
     } catch (error) {
       const message = toErrorMessage(error);
       appendLog(`ERROR: ${message}`);
@@ -302,12 +339,63 @@
     }
   }
 
+  async function confirmSchemaExport() {
+    if (!schemaExportConfirmation) {
+      return;
+    }
+
+    const { request } = schemaExportConfirmation;
+    schemaExportConfirmation = null;
+
+    try {
+      await runExport(request);
+    } catch (error) {
+      const message = toErrorMessage(error);
+      appendLog(`ERROR: ${message}`);
+      status = "执行失败";
+      showNotice(message, "error");
+    }
+  }
+
   function sanitizeRequest(): ExportRequest {
+    const exportMode = form.backend === "oracle" ? form.exportMode || "table" : "table";
     return {
       ...form,
+      exportMode,
+      conflictPolicy: isOracleSchemaRequest(form)
+        ? form.conflictPolicy || "rename"
+        : form.conflictPolicy,
       batchSize: Number(form.batchSize) || 1,
       port: Number(form.port) || 0,
     };
+  }
+
+  async function runExport(request: ExportRequest, preview?: ExportPreview) {
+    if (isOracleSchemaRequest(request)) {
+      await StartTask("export", {
+        ...request,
+        schema: preview?.schema || request.schema,
+        conflictPolicy: request.conflictPolicy || "rename",
+      });
+      return;
+    }
+
+    const check = await CheckExportOutput(request.outputPath);
+    if (check.exists) {
+      exportConflict = {
+        request,
+        resolvedPath: check.resolvedPath,
+        suggestedPath: check.suggestedPath,
+      };
+      return;
+    }
+
+    updateForm({ outputPath: check.resolvedPath });
+    await StartTask("export", {
+      ...request,
+      outputPath: check.resolvedPath,
+      conflictPolicy: "overwrite",
+    });
   }
 
   async function refreshGeneratedFiles() {
@@ -424,6 +512,19 @@
     }
   }
 
+  function onSchemaConfirmBackdropClick(event: MouseEvent) {
+    if (event.target === event.currentTarget) {
+      schemaExportConfirmation = null;
+    }
+  }
+
+  function onSchemaConfirmBackdropKeydown(event: KeyboardEvent) {
+    if (event.key === "Enter" || event.key === " " || event.key === "Escape") {
+      event.preventDefault();
+      schemaExportConfirmation = null;
+    }
+  }
+
   function replaceOutputFilename(currentPath: string, tableName: string) {
     const trimmedTable = String(tableName || "").trim();
     if (!trimmedTable) {
@@ -442,6 +543,31 @@
     const extension = extensionIndex > 0 ? currentFile.slice(extensionIndex) : ".parquet";
 
     return `${directory}${trimmedTable}${extension}`;
+  }
+
+  function replaceOutputDirectory(currentPath: string, schemaName: string) {
+    const trimmedSchema = String(schemaName || "").trim() || "schema-export";
+    const normalizedPath = String(currentPath || "").trim();
+    if (!normalizedPath) {
+      return trimmedSchema;
+    }
+
+    const separatorIndex = Math.max(
+      normalizedPath.lastIndexOf("/"),
+      normalizedPath.lastIndexOf("\\"),
+    );
+    const directory = separatorIndex >= 0 ? normalizedPath.slice(0, separatorIndex + 1) : "";
+    const leaf = separatorIndex >= 0 ? normalizedPath.slice(separatorIndex + 1) : normalizedPath;
+
+    if (leaf.toLowerCase().endsWith(".parquet")) {
+      return `${directory}${trimmedSchema}`;
+    }
+
+    return `${directory}${trimmedSchema}`;
+  }
+
+  function isOracleSchemaRequest(request: ExportRequest) {
+    return request.backend === "oracle" && request.exportMode === "schema";
   }
 
   function numberWithCommas(value: number) {
@@ -493,9 +619,7 @@
       <div class="hero-bar">
         <div>
           <h1>Parquet Export Studio</h1>
-          <p class="hero-copy">
-            从 Oracle / MySQL / PostgreSQL / MaxCompute 导出单表到本地 Parquet
-          </p>
+          <p class="hero-copy">Oracle 支持单表与按 schema 批量导出，其它数据源保持单表导出</p>
         </div>
         <div class="hero-metrics">
           <div class="hero-status">
@@ -662,20 +786,36 @@
               </span>
             </label>
 
-            <div class="field-row">
-              <label class="field grow">
-                <span class="field-label">Schema (optional)</span>
+            {#if isOracle}
+              <label class="field field-select">
+                <span class="field-label">导出模式</span>
                 <span class="field-frame">
-                  <input bind:value={form.schema} />
+                  <select value={form.exportMode} on:change={handleExportModeChange}>
+                    <option value="table">单表导出</option>
+                    <option value="schema">按 Schema 导出全部表</option>
+                  </select>
+                </span>
+              </label>
+            {/if}
+
+            <div class:is-schema-mode={isOracleSchemaMode} class="field-row schema-row">
+              <label class="field grow">
+                <span class="field-label"
+                  >{isOracleSchemaMode ? "Schema" : "Schema (optional)"}</span
+                >
+                <span class="field-frame">
+                  <input value={form.schema} on:input={handleSchemaInput} />
                 </span>
               </label>
 
-              <label class="field grow">
-                <span class="field-label">Table</span>
-                <span class="field-frame">
-                  <input value={form.table} on:input={handleTableInput} />
-                </span>
-              </label>
+              {#if !isOracleSchemaMode}
+                <label class="field grow">
+                  <span class="field-label">Table</span>
+                  <span class="field-frame">
+                    <input value={form.table} on:input={handleTableInput} />
+                  </span>
+                </label>
+              {/if}
             </div>
           {/if}
         </section>
@@ -688,7 +828,9 @@
             </h2>
 
             <label class="field">
-              <span class="field-label">输出 Parquet 路径</span>
+              <span class="field-label"
+                >{isOracleSchemaMode ? "输出目录" : "输出 Parquet 路径"}</span
+              >
               <span class="field-frame">
                 <input bind:value={form.outputPath} />
               </span>
@@ -720,7 +862,13 @@
               </label>
             </div>
 
-            <p class="panel-note">单次写入的行数。调大更快，调小更省内存。</p>
+            <p class="panel-note">
+              {#if isOracleSchemaMode}
+                将在输出目录下为 schema 内每张表生成一个独立的 parquet 文件。
+              {:else}
+                单次写入的行数。调大更快，调小更省内存。
+              {/if}
+            </p>
 
             <div class="button-row">
               <button
@@ -938,6 +1086,36 @@
             >
               覆盖原文件
             </button>
+          </div>
+        </div>
+      </div>
+    {/if}
+
+    {#if schemaExportConfirmation}
+      <div
+        class="dialog-backdrop"
+        role="button"
+        tabindex="0"
+        aria-label="关闭 schema 导出确认对话框"
+        on:click={onSchemaConfirmBackdropClick}
+        on:keydown={onSchemaConfirmBackdropKeydown}
+      >
+        <div
+          class="dialog-card"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="schemaExportConfirmTitle"
+        >
+          <h3 id="schemaExportConfirmTitle">确认批量导出</h3>
+          <p class="dialog-copy">
+            Schema <strong>{schemaExportConfirmation.schema}</strong> 下共找到
+            <strong>{numberWithCommas(schemaExportConfirmation.tableCount)}</strong> 张表，即将全部导出。
+          </p>
+          <div class="dialog-actions">
+            <button class="button button-ghost" on:click={() => (schemaExportConfirmation = null)}
+              >取消</button
+            >
+            <button class="button button-primary" on:click={confirmSchemaExport}>继续导出</button>
           </div>
         </div>
       </div>

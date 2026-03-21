@@ -2,6 +2,7 @@ export namespace appcore {
 	
 	export class ExportRequest {
 	    backend: string;
+	    exportMode: string;
 	    outputPath: string;
 	    conflictPolicy: string;
 	    table: string;
@@ -26,6 +27,7 @@ export namespace appcore {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.backend = source["backend"];
+	        this.exportMode = source["exportMode"];
 	        this.outputPath = source["outputPath"];
 	        this.conflictPolicy = source["conflictPolicy"];
 	        this.table = source["table"];
@@ -110,6 +112,24 @@ export namespace appcore {
 	        this.exists = source["exists"];
 	        this.resolvedPath = source["resolvedPath"];
 	        this.suggestedPath = source["suggestedPath"];
+	    }
+	}
+	export class ExportPreview {
+	    mode: string;
+	    schema?: string;
+	    tableCount: number;
+	    requiresConfirmation: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ExportPreview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mode = source["mode"];
+	        this.schema = source["schema"];
+	        this.tableCount = source["tableCount"];
+	        this.requiresConfirmation = source["requiresConfirmation"];
 	    }
 	}
 	

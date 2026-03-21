@@ -23,6 +23,7 @@ type Option struct {
 
 type ExportRequest struct {
 	Backend             string `json:"backend"`
+	ExportMode          string `json:"exportMode"`
 	OutputPath          string `json:"outputPath"`
 	ConflictPolicy      string `json:"conflictPolicy"`
 	Table               string `json:"table"`
@@ -53,6 +54,13 @@ type ExportOutputCheck struct {
 	Exists        bool   `json:"exists"`
 	ResolvedPath  string `json:"resolvedPath"`
 	SuggestedPath string `json:"suggestedPath"`
+}
+
+type ExportPreview struct {
+	Mode                 string `json:"mode"`
+	Schema               string `json:"schema,omitempty"`
+	TableCount           int    `json:"tableCount"`
+	RequiresConfirmation bool   `json:"requiresConfirmation"`
 }
 
 type GeneratedFile struct {
@@ -102,6 +110,7 @@ func (a *App) GetConfig() AppConfig {
 		},
 		DefaultState: ExportRequest{
 			Backend:     "oracle",
+			ExportMode:  "table",
 			OutputPath:  filepath.Join(userHomeDir(), "Downloads", "export.parquet"),
 			BatchSize:   5000,
 			Compression: "zstd",
@@ -122,6 +131,10 @@ func (a *App) StartTask(kind string, request ExportRequest) error {
 
 func (a *App) RunTaskSync(kind string, request ExportRequest) error {
 	return a.startTask(kind, request, false)
+}
+
+func (a *App) PreviewExport(request ExportRequest) (ExportPreview, error) {
+	return a.previewExport(request)
 }
 
 func (a *App) startTask(kind string, request ExportRequest, async bool) error {
