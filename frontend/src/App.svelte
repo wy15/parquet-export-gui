@@ -729,11 +729,7 @@
       </div>
 
       <div class="hero-actions">
-        <button
-          class="button button-secondary"
-          disabled={running}
-          on:click={openConfigDialog}
-        >
+        <button class="button button-secondary" disabled={running} on:click={openConfigDialog}>
           配置数据源
         </button>
         <button
@@ -1064,7 +1060,7 @@
 
             {#if dialogIsOracle}
               <label class="field field-select grow">
-                <span class="field-label">数据源</span>
+                <span class="field-label">导出模式</span>
                 <span class="field-frame">
                   <select value={dialogForm.exportMode} on:change={handleExportModeChange}>
                     <option value="table">单表导出</option>
@@ -1168,7 +1164,10 @@
               <label class="field grow">
                 <span class="field-label">Host</span>
                 <span class="field-frame">
-                  <input value={dialogForm.host} on:input={(event) => handleConfigTextInput("host", event)} />
+                  <input
+                    value={dialogForm.host}
+                    on:input={(event) => handleConfigTextInput("host", event)}
+                  />
                 </span>
               </label>
 
