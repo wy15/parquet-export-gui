@@ -10,4 +10,6 @@ export function GetConfig():Promise<appcore.AppConfig>;
 
 export function GetGeneratedFiles():Promise<Array<appcore.GeneratedFile>>;
 
+export function PreviewExport(arg1:appcore.ExportRequest):Promise<appcore.ExportPreview>;
+
 export function StartTask(arg1:string,arg2:appcore.ExportRequest):Promise<void>;

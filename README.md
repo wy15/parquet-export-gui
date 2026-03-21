@@ -1,6 +1,6 @@
 # parquet-export-gui
 
-一个使用 Go 开发的 Parquet 导出工具，用于把 Oracle（Thin 模式）、MySQL、PostgreSQL、MaxCompute 中的单表导出为本地 Parquet 文件。
+一个使用 Go 开发的 Parquet 导出工具。当前支持 Oracle（Thin 模式）单表导出、按 schema 批量导出，以及 MySQL、PostgreSQL、MaxCompute 的单表导出。
 
 当前包含两条发布线：
 
@@ -30,8 +30,8 @@
 ## 使用说明
 
 1. 选择数据源类型。
-2. 填写连接信息和表信息。
-3. 指定本地输出路径，例如 `/Users/me/Downloads/orders.parquet` 或 `C:\Users\me\Downloads\orders.parquet`。
+2. 填写连接信息和表信息；Oracle 可选择“单表导出”或“按 schema 导出全部表”。
+3. 指定本地输出路径。单表模式填写 `.parquet` 文件路径；Oracle 的 schema 模式填写输出目录。
 4. 点击“测试连接”确认配置正确。
 5. 点击“开始导出”。
 
@@ -170,4 +170,5 @@ scripts/
 ## 限制
 
 - 当前版本按“整表导出”设计，不包含字段筛选和增量同步。
+- Oracle 的 schema 模式会为 schema 下每张表分别生成一个 `.parquet` 文件。
 - `legacy-cli/` 的功能验证已经完成，当前仍按 Go 1.20.x 兼容线维护。

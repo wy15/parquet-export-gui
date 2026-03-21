@@ -83,7 +83,10 @@ build_macos_gui() {
   echo "==> Building macOS GUI"
   (
     cd "$ROOT_DIR"
-    "$WAILS_BIN" build --clean --platform darwin/arm64 -o "$APP_NAME"
+    "$WAILS_BIN" build \
+      --clean \
+      --platform darwin/arm64 \
+      -o "$APP_NAME"
   )
 
   copy_clean "$BUILD_BIN_DIR/$APP_NAME.app" "$MACOS_DIR/$APP_NAME.app"
@@ -93,11 +96,16 @@ build_windows_gui() {
   echo "==> Building Windows GUI x64"
   (
     cd "$ROOT_DIR"
-    "$WAILS_BIN" build --clean --platform windows/amd64 --webview2 download -o "$WINDOWS_GUI_NAME"
+    "$WAILS_BIN" build \
+      --clean \
+      --platform windows/amd64 \
+      --webview2 download \
+      -upx \
+      -upxflags "--best --lzma" \
+      -o "$WINDOWS_GUI_NAME"
   )
 
   copy_clean "$BUILD_BIN_DIR/$WINDOWS_GUI_NAME" "$WINDOWS_GUI_DIR/$WINDOWS_GUI_NAME"
-  compress_with_upx "$WINDOWS_GUI_DIR/$WINDOWS_GUI_NAME"
 }
 
 build_cross_cli() {

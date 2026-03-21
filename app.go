@@ -6,6 +6,7 @@ type Option = appcore.Option
 type ExportRequest = appcore.ExportRequest
 type AppConfig = appcore.AppConfig
 type ExportOutputCheck = appcore.ExportOutputCheck
+type ExportPreview = appcore.ExportPreview
 type GeneratedFile = appcore.GeneratedFile
 type ZipRequest = appcore.ZipRequest
 type ZipResult = appcore.ZipResult
@@ -37,4 +38,8 @@ func (a *App) CreateZipArchive(request ZipRequest) (ZipResult, error) {
 
 func (a *App) CheckExportOutput(path string) (ExportOutputCheck, error) {
 	return a.core.CheckExportOutput(path)
+}
+
+func (a *App) PreviewExport(request ExportRequest) (ExportPreview, error) {
+	return a.core.PreviewExport(request)
 }

@@ -3,8 +3,10 @@ package appcore
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"math"
 	"net"
@@ -77,6 +79,32 @@ type parquetExportResources struct {
 	builder    *array.RecordBuilder
 }
 
+type schemaExportManifest struct {
+	Schema string   `json:"schema"`
+	Files  []string `json:"files"`
+}
+
+type schemaExportTarget struct {
+	TableName string
+	FileName  string
+	FilePath  string
+}
+
+const schemaExportManifestName = ".parquet-export-schema-manifest.json"
+
+func (r ExportRequest) normalizedExportMode() string {
+	switch strings.ToLower(strings.TrimSpace(r.ExportMode)) {
+	case "schema":
+		return "schema"
+	default:
+		return "table"
+	}
+}
+
+func isOracleSchemaExport(request ExportRequest) bool {
+	return request.Backend == "oracle" && request.normalizedExportMode() == "schema"
+}
+
 func (a *App) runTask(kind string, request ExportRequest) error {
 	request.Backend = strings.ToLower(strings.TrimSpace(request.Backend))
 
@@ -132,9 +160,54 @@ func (a *App) testConnection(request ExportRequest) error {
 	return nil
 }
 
+func (a *App) previewExport(request ExportRequest) (ExportPreview, error) {
+	request.Backend = strings.ToLower(strings.TrimSpace(request.Backend))
+
+	requireTable := !isOracleSchemaExport(request)
+	if err := validateRequest(request, false, requireTable); err != nil {
+		return ExportPreview{}, err
+	}
+	if isOracleSchemaExport(request) && strings.TrimSpace(request.Schema) == "" {
+		return ExportPreview{}, errors.New("Schema 不能为空")
+	}
+
+	preview := ExportPreview{
+		Mode:       request.normalizedExportMode(),
+		TableCount: 1,
+	}
+	if !isOracleSchemaExport(request) {
+		return preview, nil
+	}
+
+	db, err := openDatabase(request)
+	if err != nil {
+		return ExportPreview{}, err
+	}
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	schemaName, tables, err := listOracleSchemaTables(ctx, db, request.Schema)
+	if err != nil {
+		return ExportPreview{}, err
+	}
+
+	return ExportPreview{
+		Mode:                 "schema",
+		Schema:               schemaName,
+		TableCount:           len(tables),
+		RequiresConfirmation: len(tables) > 10,
+	}, nil
+}
+
 func (a *App) exportTableToParquet(request ExportRequest) (exportResult, error) {
-	if err := validateRequest(request, true, true); err != nil {
+	requireTable := !isOracleSchemaExport(request)
+	if err := validateRequest(request, true, requireTable); err != nil {
 		return exportResult{}, err
+	}
+	if isOracleSchemaExport(request) && strings.TrimSpace(request.Schema) == "" {
+		return exportResult{}, errors.New("Schema 不能为空")
 	}
 
 	outputPath, err := resolveOutputPath(request.OutputPath)
@@ -150,7 +223,9 @@ func (a *App) exportTableToParquet(request ExportRequest) (exportResult, error) 
 	}
 
 	var result exportResult
-	if request.Backend == "maxcompute" {
+	if isOracleSchemaExport(request) {
+		result, err = a.exportOracleSchemaToParquet(request, outputPath)
+	} else if request.Backend == "maxcompute" {
 		result, err = a.exportMaxComputeTableToParquet(request, outputPath)
 	} else {
 		result, err = a.exportSQLTableToParquet(request, outputPath)
@@ -159,11 +234,85 @@ func (a *App) exportTableToParquet(request ExportRequest) (exportResult, error) 
 		return exportResult{}, err
 	}
 
-	if err := a.rememberGeneratedFile(result.OutputPath); err != nil {
-		return exportResult{}, err
+	if !isOracleSchemaExport(request) {
+		if err := a.rememberGeneratedFile(result.OutputPath); err != nil {
+			return exportResult{}, err
+		}
 	}
 
 	return result, nil
+}
+
+func (a *App) exportOracleSchemaToParquet(request ExportRequest, outputDir string) (exportResult, error) {
+	db, err := openDatabase(request)
+	if err != nil {
+		return exportResult{}, err
+	}
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	schemaName, tables, err := listOracleSchemaTables(ctx, db, request.Schema)
+	if err != nil {
+		return exportResult{}, err
+	}
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return exportResult{}, err
+	}
+
+	targets := buildSchemaExportTargets(outputDir, tables)
+	generatedFiles := make([]string, 0, len(targets))
+	totalRows := 0
+	for index, target := range targets {
+		tablePath, err := resolveExportConflict(target.FilePath, request.ConflictPolicy)
+		if err != nil {
+			return exportResult{}, err
+		}
+
+		singleRequest := request
+		singleRequest.Schema = schemaName
+		singleRequest.Table = target.TableName
+
+		a.emit(TaskEvent{
+			Kind:    "export",
+			Type:    "log",
+			Message: fmt.Sprintf("开始导出第 %d/%d 张表: %s", index+1, len(targets), fullTableName(singleRequest)),
+		})
+
+		result, err := a.exportSQLQueryToParquet(
+			db,
+			singleRequest,
+			tablePath,
+			buildOracleQuotedExportQuery(schemaName, target.TableName),
+			totalRows,
+		)
+		if err != nil {
+			return exportResult{}, err
+		}
+		totalRows += result.RowsWritten
+
+		if err := a.rememberGeneratedFile(result.OutputPath); err != nil {
+			return exportResult{}, err
+		}
+		generatedFiles = append(generatedFiles, filepath.Base(result.OutputPath))
+	}
+
+	if shouldCleanupSchemaExportFiles(request.ConflictPolicy) {
+		if err := removeStaleSchemaExportFiles(outputDir, schemaName, generatedFiles); err != nil {
+			return exportResult{}, err
+		}
+	}
+	if err := writeSchemaExportManifest(outputDir, schemaName, generatedFiles); err != nil {
+		return exportResult{}, err
+	}
+
+	a.emit(TaskEvent{
+		Kind:    "export",
+		Type:    "log",
+		Message: fmt.Sprintf("Schema 导出完成，共导出 %d 张表", len(tables)),
+	})
+	return exportResult{OutputPath: outputDir, RowsWritten: totalRows}, nil
 }
 
 func (a *App) exportSQLTableToParquet(request ExportRequest, outputPath string) (exportResult, error) {
@@ -177,6 +326,16 @@ func (a *App) exportSQLTableToParquet(request ExportRequest, outputPath string) 
 	a.emit(TaskEvent{Kind: "export", Type: "log", Message: fmt.Sprintf("准备导出 %s -> %s", fullTableName(request), outputPath)})
 	a.emit(TaskEvent{Kind: "export", Type: "log", Message: fmt.Sprintf("执行查询: %s", query)})
 
+	return a.exportSQLQueryToParquet(db, request, outputPath, query, 0)
+}
+
+func (a *App) exportSQLQueryToParquet(
+	db *sql.DB,
+	request ExportRequest,
+	outputPath string,
+	query string,
+	progressBase int,
+) (exportResult, error) {
 	rows, err := db.QueryContext(context.Background(), query)
 	if err != nil {
 		return exportResult{}, err
@@ -220,8 +379,8 @@ func (a *App) exportSQLTableToParquet(request ExportRequest, outputPath string) 
 				return exportResult{}, err
 			}
 			totalRows += batchRows
-			a.emit(TaskEvent{Kind: "export", Type: "progress", RowsWritten: totalRows})
-			a.emit(TaskEvent{Kind: "export", Type: "log", Message: fmt.Sprintf("已写入 %s 行", formatRows(totalRows))})
+			a.emit(TaskEvent{Kind: "export", Type: "progress", RowsWritten: progressBase + totalRows})
+			a.emit(TaskEvent{Kind: "export", Type: "log", Message: fmt.Sprintf("已写入 %s 行", formatRows(progressBase+totalRows))})
 			batchRows = 0
 		}
 	}
@@ -235,8 +394,8 @@ func (a *App) exportSQLTableToParquet(request ExportRequest, outputPath string) 
 			return exportResult{}, err
 		}
 		totalRows += batchRows
-		a.emit(TaskEvent{Kind: "export", Type: "progress", RowsWritten: totalRows})
-		a.emit(TaskEvent{Kind: "export", Type: "log", Message: fmt.Sprintf("已写入 %s 行", formatRows(totalRows))})
+		a.emit(TaskEvent{Kind: "export", Type: "progress", RowsWritten: progressBase + totalRows})
+		a.emit(TaskEvent{Kind: "export", Type: "log", Message: fmt.Sprintf("已写入 %s 行", formatRows(progressBase+totalRows))})
 	}
 
 	if totalRows == 0 {
@@ -358,6 +517,9 @@ func (a *App) writeMaxComputeBatch(
 func validateRequest(request ExportRequest, requireOutput bool, requireTable bool) error {
 	if _, ok := supportedBackends[request.Backend]; !ok {
 		return fmt.Errorf("不支持的数据源: %s", request.Backend)
+	}
+	if request.Backend != "oracle" && request.normalizedExportMode() == "schema" {
+		return errors.New("只有 Oracle 支持按 schema 导出")
 	}
 	if requireTable && strings.TrimSpace(request.Table) == "" {
 		return errors.New("表名不能为空")
@@ -812,6 +974,242 @@ func buildExportQuery(request ExportRequest) string {
 		return query + ";"
 	}
 	return query
+}
+
+func buildOracleQuotedExportQuery(schemaName, tableName string) string {
+	return "SELECT * FROM " + quoteOracleIdentifier(schemaName) + "." + quoteOracleIdentifier(tableName)
+}
+
+func quoteOracleIdentifier(identifier string) string {
+	return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
+}
+
+func listOracleSchemaTables(ctx context.Context, db *sql.DB, schemaName string) (string, []string, error) {
+	trimmedSchema := strings.TrimSpace(schemaName)
+	candidates := []string{trimmedSchema}
+	upperSchema := strings.ToUpper(trimmedSchema)
+	if upperSchema != trimmedSchema {
+		candidates = append(candidates, upperSchema)
+	}
+
+	for _, candidate := range candidates {
+		rows, err := db.QueryContext(ctx, "SELECT OWNER, TABLE_NAME FROM ALL_TABLES WHERE OWNER = :1 ORDER BY TABLE_NAME", candidate)
+		if err != nil {
+			return "", nil, err
+		}
+
+		tables := make([]string, 0, 32)
+		resolvedSchema := candidate
+		for rows.Next() {
+			var owner string
+			var tableName string
+			if err := rows.Scan(&owner, &tableName); err != nil {
+				rows.Close()
+				return "", nil, err
+			}
+			resolvedSchema = owner
+			tables = append(tables, tableName)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return "", nil, err
+		}
+		rows.Close()
+
+		if len(tables) > 0 {
+			return resolvedSchema, tables, nil
+		}
+	}
+
+	return "", nil, fmt.Errorf("Schema %s 下未找到可导出的表", trimmedSchema)
+}
+
+func buildSchemaExportTargets(outputDir string, tableNames []string) []schemaExportTarget {
+	targets := make([]schemaExportTarget, 0, len(tableNames))
+	usedNames := make(map[string]struct{}, len(tableNames))
+
+	for _, tableName := range tableNames {
+		fileName := uniqueSchemaExportFileName(tableName, usedNames)
+		targets = append(targets, schemaExportTarget{
+			TableName: tableName,
+			FileName:  fileName,
+			FilePath:  filepath.Join(outputDir, fileName),
+		})
+	}
+
+	return targets
+}
+
+func uniqueSchemaExportFileName(tableName string, usedNames map[string]struct{}) string {
+	baseName := schemaExportFileStem(tableName)
+	fileName := baseName + ".parquet"
+	lookupKey := strings.ToLower(fileName)
+
+	if _, exists := usedNames[lookupKey]; !exists {
+		usedNames[lookupKey] = struct{}{}
+		return fileName
+	}
+
+	hashSuffix := shortStableHash(tableName)
+	fileName = baseName + "__" + hashSuffix + ".parquet"
+	lookupKey = strings.ToLower(fileName)
+	if _, exists := usedNames[lookupKey]; !exists {
+		usedNames[lookupKey] = struct{}{}
+		return fileName
+	}
+
+	for index := 2; ; index++ {
+		fileName = fmt.Sprintf("%s__%s_%d.parquet", baseName, hashSuffix, index)
+		lookupKey = strings.ToLower(fileName)
+		if _, exists := usedNames[lookupKey]; !exists {
+			usedNames[lookupKey] = struct{}{}
+			return fileName
+		}
+	}
+}
+
+func schemaExportFileStem(tableName string) string {
+	trimmed := strings.TrimSpace(tableName)
+	var builder strings.Builder
+	builder.Grow(len(trimmed))
+
+	lastUnderscore := false
+	for _, r := range trimmed {
+		if isSafeFileNameRune(r) {
+			builder.WriteRune(r)
+			lastUnderscore = false
+			continue
+		}
+		if !lastUnderscore {
+			builder.WriteByte('_')
+			lastUnderscore = true
+		}
+	}
+
+	stem := strings.Trim(builder.String(), " ._")
+	if stem == "" {
+		stem = "table"
+	}
+	if isReservedWindowsBaseName(stem) {
+		stem += "_"
+	}
+	return stem
+}
+
+func isSafeFileNameRune(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z':
+		return true
+	case r >= 'A' && r <= 'Z':
+		return true
+	case r >= '0' && r <= '9':
+		return true
+	}
+
+	switch r {
+	case '-', '_', ' ', '.', '(', ')', '[', ']', '{', '}':
+		return true
+	default:
+		return r > 31 && r != '<' && r != '>' && r != ':' && r != '"' && r != '/' && r != '\\' && r != '|' && r != '?' && r != '*'
+	}
+}
+
+func isReservedWindowsBaseName(name string) bool {
+	base := strings.ToUpper(strings.TrimSpace(name))
+	switch base {
+	case "CON", "PRN", "AUX", "NUL",
+		"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		return true
+	default:
+		return false
+	}
+}
+
+func shortStableHash(value string) string {
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(value))
+	return fmt.Sprintf("%08x", hash.Sum32())
+}
+
+func removeStaleSchemaExportFiles(outputDir, schemaName string, currentFilesList []string) error {
+	manifest, err := readSchemaExportManifest(outputDir)
+	if err != nil {
+		return err
+	}
+	if manifest == nil || !strings.EqualFold(strings.TrimSpace(manifest.Schema), strings.TrimSpace(schemaName)) {
+		return nil
+	}
+
+	currentFiles := make(map[string]struct{}, len(currentFilesList))
+	for _, fileName := range currentFilesList {
+		currentFiles[fileName] = struct{}{}
+	}
+
+	for _, fileName := range manifest.Files {
+		if fileName == "" || fileName != filepath.Base(fileName) {
+			continue
+		}
+		if _, keep := currentFiles[fileName]; keep {
+			continue
+		}
+
+		stalePath := filepath.Join(outputDir, fileName)
+		info, statErr := os.Stat(stalePath)
+		if statErr != nil {
+			if os.IsNotExist(statErr) {
+				continue
+			}
+			return statErr
+		}
+		if info.IsDir() {
+			continue
+		}
+		if err := os.Remove(stalePath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func shouldCleanupSchemaExportFiles(policy string) bool {
+	switch strings.ToLower(strings.TrimSpace(policy)) {
+	case "", "overwrite":
+		return true
+	default:
+		return false
+	}
+}
+
+func readSchemaExportManifest(outputDir string) (*schemaExportManifest, error) {
+	manifestPath := filepath.Join(outputDir, schemaExportManifestName)
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var manifest schemaExportManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return nil, fmt.Errorf("读取 schema 导出清单失败: %w", err)
+	}
+	return &manifest, nil
+}
+
+func writeSchemaExportManifest(outputDir, schemaName string, files []string) error {
+	payload, err := json.MarshalIndent(schemaExportManifest{
+		Schema: schemaName,
+		Files:  files,
+	}, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	manifestPath := filepath.Join(outputDir, schemaExportManifestName)
+	return os.WriteFile(manifestPath, payload, 0o644)
 }
 
 func inferMaxComputeColumnDefs(columns []odpstableschema.Column) []columnDef {
