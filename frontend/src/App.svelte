@@ -92,6 +92,14 @@
   $: isMaxCompute = form.backend === "maxcompute";
   $: allSelected = generatedFiles.length > 0 && selectedFiles.length === generatedFiles.length;
   $: selectedCount = selectedFiles.length;
+  $: backendLabel = backends.find((option) => option.value === form.backend)?.label ?? form.backend;
+  $: statusTone = running
+    ? "running"
+    : status.includes("失败")
+      ? "error"
+      : status === "导出完成" || status === "连接成功"
+        ? "success"
+        : "idle";
 
   afterUpdate(() => {
     if (!logView) {
@@ -488,305 +496,295 @@
 {#if fatalError}
   <pre class="fatal-error">{fatalError}</pre>
 {:else}
-  <div class:page-shell={true} class:is-entering={entering}>
-    <section class="hero-card">
-      <div class="hero-bar">
-        <div>
-          <h1>Parquet Export Studio</h1>
-          <p class="hero-copy">
-            从 Oracle / MySQL / PostgreSQL / MaxCompute 导出单表到本地 Parquet
-          </p>
-        </div>
-        <div class="hero-metrics">
-          <div class="hero-status">
-            <span class:hero-status-dot={true} class:is-running={running}></span>
-            {status}
-          </div>
-          <div class="hero-rows">已写入 {numberWithCommas(rowsWritten)} 行</div>
-          {#if running}
-            <div class="hero-progress">
-              <div class="hero-progress-bar"></div>
-            </div>
-          {/if}
-        </div>
+  <div class:workspace={true} class:is-entering={entering}>
+    <header class="topbar">
+      <div class="brand-block">
+        <p class="eyebrow">Parquet Export Studio</p>
+        <h1>导出工作台</h1>
+        <p class="subcopy">将数据库表导出为 Parquet 文件。</p>
       </div>
 
-      <div class="panel-grid">
-        <section class="panel panel-left">
-          <h2 class="section-title">
-            <span class="section-title-mark" aria-hidden="true"></span>
-            <span>连接配置</span>
-          </h2>
+      <div class="hero-actions">
+        <button
+          class="button button-secondary"
+          disabled={running}
+          on:click={() => startTask("test")}
+        >
+          测试连接
+        </button>
+        <button class="button button-primary" disabled={running} on:click={startExportTask}>
+          <span class="button-icon">▶</span>开始导出
+        </button>
+      </div>
+    </header>
 
-          <label class="field field-select">
-            <span class="field-label">数据源</span>
+    <section class="hero-strip">
+      <div class="hero-status-panel">
+        <div class="status-header">
+          <span class={`status-dot status-${statusTone}`}></span>
+          <span class="status-title">{status}</span>
+        </div>
+        <p class="status-copy">
+          当前数据源 <strong>{backendLabel}</strong>
+          {#if form.table}
+            ，目标表 <strong>{form.table}</strong>
+          {/if}
+        </p>
+        {#if running}
+          <div class="status-progress" aria-hidden="true">
+            <div class="status-progress-bar"></div>
+          </div>
+        {/if}
+      </div>
+
+      <dl class="hero-stats">
+        <div>
+          <dt>已写入</dt>
+          <dd>{numberWithCommas(rowsWritten)}</dd>
+        </div>
+        <div>
+          <dt>生成文件</dt>
+          <dd>{generatedFiles.length}</dd>
+        </div>
+        <div>
+          <dt>日志条数</dt>
+          <dd>{logs.length}</dd>
+        </div>
+      </dl>
+    </section>
+
+    <main class="workbench">
+      <section class="surface surface-source">
+        <div class="surface-head">
+          <div>
+            <p class="surface-kicker">Source</p>
+            <h2>连接配置</h2>
+          </div>
+          <p class="surface-note">配置数据源与导出表。</p>
+        </div>
+
+        <label class="field field-select">
+          <span class="field-label">数据源</span>
+          <span class="field-frame">
+            <select value={form.backend} on:change={handleBackendChange}>
+              {#each backends as option (option.value)}
+                <option value={option.value}>{option.label}</option>
+              {/each}
+            </select>
+          </span>
+        </label>
+
+        {#if isMaxCompute}
+          <label class="field">
+            <span class="field-label">Endpoint</span>
             <span class="field-frame">
-              <select value={form.backend} on:change={handleBackendChange}>
-                {#each backends as option (option.value)}
-                  <option value={option.value}>{option.label}</option>
-                {/each}
-              </select>
+              <input
+                bind:value={form.maxcomputeEndpoint}
+                placeholder="https://service.cn-hangzhou.maxcompute.aliyun.com/api"
+              />
             </span>
           </label>
 
-          {#if isMaxCompute}
-            <label class="field">
-              <span class="field-label">Endpoint</span>
+          <label class="field">
+            <span class="field-label">Project</span>
+            <span class="field-frame">
+              <input bind:value={form.maxcomputeProject} />
+            </span>
+          </label>
+
+          <div class="field-row">
+            <label class="field grow">
+              <span class="field-label">Access ID</span>
+              <span class="field-frame">
+                <input bind:value={form.maxcomputeAccessId} />
+              </span>
+            </label>
+
+            <label class="field grow field-password">
+              <span class="field-label">Access Key</span>
               <span class="field-frame">
                 <input
-                  bind:value={form.maxcomputeEndpoint}
-                  placeholder="https://service.cn-hangzhou.maxcompute.aliyun.com/api"
+                  bind:value={form.maxcomputeAccessKey}
+                  type={fieldInputType("maxcomputeAccessKey")}
                 />
+                <button
+                  type="button"
+                  class="field-visibility-toggle"
+                  aria-label={visibility.maxcomputeAccessKey ? "隐藏" : "显示"}
+                  aria-pressed={visibility.maxcomputeAccessKey}
+                  title={visibility.maxcomputeAccessKey ? "隐藏" : "显示"}
+                  on:click={() => toggleVisibility("maxcomputeAccessKey")}
+                >
+                  <svg viewBox="0 0 20 20" aria-hidden="true">
+                    <path
+                      d="M2.4 10C3.86 6.95 6.66 5 10 5C13.34 5 16.14 6.95 17.6 10C16.14 13.05 13.34 15 10 15C6.66 15 3.86 13.05 2.4 10Z"
+                    />
+                    <circle cx="10" cy="10" r="2.4" />
+                    {#if !visibility.maxcomputeAccessKey}
+                      <path d="M4 4L16 16" />
+                    {/if}
+                  </svg>
+                </button>
               </span>
             </label>
+          </div>
 
-            <label class="field">
-              <span class="field-label">Project</span>
+          <div class="field-row">
+            <label class="field grow">
+              <span class="field-label">Schema (optional)</span>
               <span class="field-frame">
-                <input bind:value={form.maxcomputeProject} />
+                <input bind:value={form.schema} />
               </span>
             </label>
 
-            <div class="field-row">
-              <label class="field grow">
-                <span class="field-label">Access ID</span>
-                <span class="field-frame">
-                  <input bind:value={form.maxcomputeAccessId} />
-                </span>
-              </label>
-
-              <label class="field grow field-password">
-                <span class="field-label">Access Key</span>
-                <span class="field-frame">
-                  <input
-                    bind:value={form.maxcomputeAccessKey}
-                    type={fieldInputType("maxcomputeAccessKey")}
-                  />
-                  <button
-                    type="button"
-                    class="field-visibility-toggle"
-                    aria-label={visibility.maxcomputeAccessKey ? "隐藏" : "显示"}
-                    aria-pressed={visibility.maxcomputeAccessKey}
-                    title={visibility.maxcomputeAccessKey ? "隐藏" : "显示"}
-                    on:click={() => toggleVisibility("maxcomputeAccessKey")}
-                  >
-                    <svg viewBox="0 0 20 20" aria-hidden="true">
-                      <path
-                        d="M2.4 10C3.86 6.95 6.66 5 10 5C13.34 5 16.14 6.95 17.6 10C16.14 13.05 13.34 15 10 15C6.66 15 3.86 13.05 2.4 10Z"
-                      />
-                      <circle cx="10" cy="10" r="2.4" />
-                      {#if !visibility.maxcomputeAccessKey}
-                        <path d="M4 4L16 16" />
-                      {/if}
-                    </svg>
-                  </button>
-                </span>
-              </label>
-            </div>
-
-            <div class="field-row">
-              <label class="field grow">
-                <span class="field-label">Schema (optional)</span>
-                <span class="field-frame">
-                  <input bind:value={form.schema} />
-                </span>
-              </label>
-
-              <label class="field grow">
-                <span class="field-label">Table</span>
-                <span class="field-frame">
-                  <input value={form.table} on:input={handleTableInput} />
-                </span>
-              </label>
-            </div>
-
-            <label class="field">
-              <span class="field-label">Partition Spec (optional)</span>
+            <label class="field grow">
+              <span class="field-label">Table</span>
               <span class="field-frame">
-                <input bind:value={form.partitionSpec} placeholder="ds='2026-03-07', region='cn'" />
+                <input value={form.table} on:input={handleTableInput} />
               </span>
             </label>
-          {:else}
-            <label class="field">
-              <span class="field-label">Host</span>
-              <span class="field-frame">
-                <input bind:value={form.host} />
-              </span>
-            </label>
+          </div>
 
-            <label class="field">
+          <label class="field">
+            <span class="field-label">Partition Spec (optional)</span>
+            <span class="field-frame">
+              <input bind:value={form.partitionSpec} placeholder="ds='2026-03-07', region='cn'" />
+            </span>
+          </label>
+        {:else}
+          <label class="field">
+            <span class="field-label">Host</span>
+            <span class="field-frame">
+              <input bind:value={form.host} />
+            </span>
+          </label>
+
+          <div class="field-row">
+            <label class="field grow">
               <span class="field-label">Port</span>
               <span class="field-frame">
                 <input type="number" value={form.port} on:input={handlePortInput} />
               </span>
             </label>
 
-            <div class="field-row">
-              <label class="field grow">
-                <span class="field-label">Username</span>
-                <span class="field-frame">
-                  <input bind:value={form.username} />
-                </span>
-              </label>
-
-              <label class="field grow field-password">
-                <span class="field-label">Password</span>
-                <span class="field-frame">
-                  <input bind:value={form.password} type={fieldInputType("password")} />
-                  <button
-                    type="button"
-                    class="field-visibility-toggle"
-                    aria-label={visibility.password ? "隐藏" : "显示"}
-                    aria-pressed={visibility.password}
-                    title={visibility.password ? "隐藏" : "显示"}
-                    on:click={() => toggleVisibility("password")}
-                  >
-                    <svg viewBox="0 0 20 20" aria-hidden="true">
-                      <path
-                        d="M2.4 10C3.86 6.95 6.66 5 10 5C13.34 5 16.14 6.95 17.6 10C16.14 13.05 13.34 15 10 15C6.66 15 3.86 13.05 2.4 10Z"
-                      />
-                      <circle cx="10" cy="10" r="2.4" />
-                      {#if !visibility.password}
-                        <path d="M4 4L16 16" />
-                      {/if}
-                    </svg>
-                  </button>
-                </span>
-              </label>
-            </div>
-
-            <label class="field">
-              <span class="field-label">Database / Service Name</span>
+            <label class="field grow">
+              <span class="field-label">Database / Service</span>
               <span class="field-frame">
                 <input bind:value={form.database} />
               </span>
             </label>
+          </div>
 
-            <div class="field-row">
-              <label class="field grow">
-                <span class="field-label">Schema (optional)</span>
-                <span class="field-frame">
-                  <input bind:value={form.schema} />
-                </span>
-              </label>
+          <div class="field-row">
+            <label class="field grow">
+              <span class="field-label">Username</span>
+              <span class="field-frame">
+                <input bind:value={form.username} />
+              </span>
+            </label>
 
-              <label class="field grow">
-                <span class="field-label">Table</span>
-                <span class="field-frame">
-                  <input value={form.table} on:input={handleTableInput} />
-                </span>
-              </label>
+            <label class="field grow field-password">
+              <span class="field-label">Password</span>
+              <span class="field-frame">
+                <input bind:value={form.password} type={fieldInputType("password")} />
+                <button
+                  type="button"
+                  class="field-visibility-toggle"
+                  aria-label={visibility.password ? "隐藏" : "显示"}
+                  aria-pressed={visibility.password}
+                  title={visibility.password ? "隐藏" : "显示"}
+                  on:click={() => toggleVisibility("password")}
+                >
+                  <svg viewBox="0 0 20 20" aria-hidden="true">
+                    <path
+                      d="M2.4 10C3.86 6.95 6.66 5 10 5C13.34 5 16.14 6.95 17.6 10C16.14 13.05 13.34 15 10 15C6.66 15 3.86 13.05 2.4 10Z"
+                    />
+                    <circle cx="10" cy="10" r="2.4" />
+                    {#if !visibility.password}
+                      <path d="M4 4L16 16" />
+                    {/if}
+                  </svg>
+                </button>
+              </span>
+            </label>
+          </div>
+
+          <div class="field-row">
+            <label class="field grow">
+              <span class="field-label">Schema (optional)</span>
+              <span class="field-frame">
+                <input bind:value={form.schema} />
+              </span>
+            </label>
+
+            <label class="field grow">
+              <span class="field-label">Table</span>
+              <span class="field-frame">
+                <input value={form.table} on:input={handleTableInput} />
+              </span>
+            </label>
+          </div>
+        {/if}
+      </section>
+
+      <div class="workbench-main">
+        <section class="surface surface-export">
+          <div class="surface-head">
+            <div>
+              <p class="surface-kicker">Export</p>
+              <h2>导出参数</h2>
             </div>
-          {/if}
-        </section>
+            <p class="surface-note">设置输出路径、批次大小和压缩方式。</p>
+          </div>
 
-        <div class="panel-stack">
-          <section class="panel">
-            <h2 class="section-title">
-              <span class="section-title-mark" aria-hidden="true"></span>
-              <span>导出参数</span>
-            </h2>
-
-            <label class="field">
+          <div class="parameter-grid">
+            <label class="field field-span-2">
               <span class="field-label">输出 Parquet 路径</span>
               <span class="field-frame">
                 <input bind:value={form.outputPath} />
               </span>
             </label>
 
-            <div class="field-row">
-              <label class="field grow">
-                <span class="field-label">批次大小</span>
-                <span class="field-frame">
-                  <input
-                    min="1"
-                    step="1000"
-                    type="number"
-                    value={form.batchSize}
-                    on:input={handleBatchSizeInput}
-                  />
-                </span>
-              </label>
-
-              <label class="field grow field-select">
-                <span class="field-label">压缩</span>
-                <span class="field-frame">
-                  <select bind:value={form.compression}>
-                    {#each compressions as option (option)}
-                      <option value={option}>{option}</option>
-                    {/each}
-                  </select>
-                </span>
-              </label>
-            </div>
-
-            <p class="panel-note">单次写入的行数。调大更快，调小更省内存。</p>
-
-            <div class="button-row">
-              <button
-                class="button button-secondary"
-                disabled={running}
-                on:click={() => startTask("test")}
-              >
-                测试连接
-              </button>
-              <button class="button button-primary" disabled={running} on:click={startExportTask}>
-                <span class="button-icon">▶</span>开始导出
-              </button>
-            </div>
-          </section>
-
-          <section class="panel panel-log">
-            <button
-              type="button"
-              class="panel-toggle"
-              aria-expanded={logsExpanded}
-              on:click={() => (logsExpanded = !logsExpanded)}
-            >
-              <span class="panel-toggle-copy">
-                <span class="panel-toggle-eyebrow">调试输出</span>
-                <span class="panel-toggle-title">运行日志</span>
+            <label class="field grow">
+              <span class="field-label">批次大小</span>
+              <span class="field-frame">
+                <input
+                  min="1"
+                  step="1000"
+                  type="number"
+                  value={form.batchSize}
+                  on:input={handleBatchSizeInput}
+                />
               </span>
-              <span class="panel-toggle-meta">
-                <span class="log-badge">{logs.length}</span>
-                <span class="panel-toggle-state">{logsExpanded ? "收起" : "展开"}</span>
-                <svg
-                  class="panel-chevron"
-                  class:is-open={logsExpanded}
-                  width="14"
-                  height="14"
-                  viewBox="0 0 14 14"
-                  fill="none"
-                  aria-hidden="true"
-                >
-                  <path
-                    d="M3.5 5.25L7 8.75L10.5 5.25"
-                    stroke="currentColor"
-                    stroke-width="1.6"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  />
-                </svg>
+            </label>
+
+            <label class="field field-select grow">
+              <span class="field-label">压缩</span>
+              <span class="field-frame">
+                <select bind:value={form.compression}>
+                  {#each compressions as option (option)}
+                    <option value={option}>{option}</option>
+                  {/each}
+                </select>
               </span>
-            </button>
+            </label>
+          </div>
 
-            <div class="log-collapse" class:is-open={logsExpanded}>
-              <textarea
-                bind:this={logView}
-                readonly
-                placeholder="日志会显示在这里"
-                aria-label="运行日志"
-                on:scroll={handleLogScroll}
-                value={logs.join("\n")}
-              ></textarea>
+          <div class="inline-note-row">
+            <p class="panel-note">批次越大速度越快，批次越小内存占用越低。</p>
+            <p class="output-preview">{form.outputPath || "请设置输出路径"}</p>
+          </div>
+        </section>
+
+        <div class="result-grid">
+          <section class="surface surface-files">
+            <div class="surface-head">
+              <div>
+                <p class="surface-kicker">Outputs</p>
+                <h2>本次生成的 Parquet</h2>
+              </div>
+              <p class="surface-note">查看本次会话生成的文件。</p>
             </div>
-          </section>
-
-          <section class="panel">
-            <h2 class="section-title">
-              <span class="section-title-mark" aria-hidden="true"></span>
-              <span>本次生成的 Parquet</span>
-            </h2>
 
             <div class="generated-toolbar">
               <label class="list-checkbox master-checkbox">
@@ -804,7 +802,7 @@
 
             <div class="generated-list" class:is-empty={generatedFiles.length === 0}>
               {#if generatedFiles.length === 0}
-                <p class="empty-copy">当前会话还没有生成 parquet 文件。</p>
+                <p class="empty-copy">当前会话还没有导出文件。</p>
               {:else}
                 {#each generatedFiles as file (file.path)}
                   <label
@@ -827,66 +825,118 @@
                 {/each}
               {/if}
             </div>
+          </section>
 
-            <div class="zip-controls">
-              <div class="zip-surface">
-                <label class="list-checkbox">
-                  <input
-                    type="checkbox"
-                    checked={zipEnabled}
-                    disabled={generatedFiles.length === 0}
-                    on:change={handleZipEnabledChange}
-                  />
-                  <span>ZIP 压缩选中文件</span>
-                </label>
-
-                {#if zipEnabled}
-                  <label class="field field-password compact-field">
-                    <span class="field-label">加密密码（可选）</span>
-                    <span class="field-frame">
-                      <input
-                        bind:value={zipPassword}
-                        type={fieldInputType("zipPassword")}
-                        placeholder="留空则生成不加密 ZIP"
-                      />
-                      <button
-                        type="button"
-                        class="field-visibility-toggle"
-                        aria-label={visibility.zipPassword ? "隐藏" : "显示"}
-                        aria-pressed={visibility.zipPassword}
-                        title={visibility.zipPassword ? "隐藏" : "显示"}
-                        on:click={() => toggleVisibility("zipPassword")}
-                      >
-                        <svg viewBox="0 0 20 20" aria-hidden="true">
-                          <path
-                            d="M2.4 10C3.86 6.95 6.66 5 10 5C13.34 5 16.14 6.95 17.6 10C16.14 13.05 13.34 15 10 15C6.66 15 3.86 13.05 2.4 10Z"
-                          />
-                          <circle cx="10" cy="10" r="2.4" />
-                          {#if !visibility.zipPassword}
-                            <path d="M4 4L16 16" />
-                          {/if}
-                        </svg>
-                      </button>
-                    </span>
-                  </label>
-                {/if}
-
-                <div class="zip-actions">
-                  <button
-                    class="button button-secondary"
-                    disabled={!zipEnabled || selectedCount === 0 || zipBusy}
-                    on:click={createZipArchiveFromSelection}
-                  >
-                    {zipBusy ? "正在打包…" : "创建 ZIP"}
-                  </button>
-                  <p class="zip-note">ZIP 将保存到首个选中文件所在目录。</p>
-                </div>
+          <section class="surface surface-zip">
+            <div class="surface-head">
+              <div>
+                <p class="surface-kicker">Archive</p>
+                <h2>ZIP 打包</h2>
               </div>
+              <p class="surface-note">将选中文件打包为 ZIP。</p>
+            </div>
+
+            <label class="list-checkbox zip-toggle">
+              <input
+                type="checkbox"
+                checked={zipEnabled}
+                disabled={generatedFiles.length === 0}
+                on:change={handleZipEnabledChange}
+              />
+              <span>启用 ZIP 压缩</span>
+            </label>
+
+            {#if zipEnabled}
+              <label class="field field-password compact-field">
+                <span class="field-label">加密密码（可选）</span>
+                <span class="field-frame">
+                  <input
+                    bind:value={zipPassword}
+                    type={fieldInputType("zipPassword")}
+                    placeholder="留空则生成不加密 ZIP"
+                  />
+                  <button
+                    type="button"
+                    class="field-visibility-toggle"
+                    aria-label={visibility.zipPassword ? "隐藏" : "显示"}
+                    aria-pressed={visibility.zipPassword}
+                    title={visibility.zipPassword ? "隐藏" : "显示"}
+                    on:click={() => toggleVisibility("zipPassword")}
+                  >
+                    <svg viewBox="0 0 20 20" aria-hidden="true">
+                      <path
+                        d="M2.4 10C3.86 6.95 6.66 5 10 5C13.34 5 16.14 6.95 17.6 10C16.14 13.05 13.34 15 10 15C6.66 15 3.86 13.05 2.4 10Z"
+                      />
+                      <circle cx="10" cy="10" r="2.4" />
+                      {#if !visibility.zipPassword}
+                        <path d="M4 4L16 16" />
+                      {/if}
+                    </svg>
+                  </button>
+                </span>
+              </label>
+            {/if}
+
+            <div class="zip-actions">
+              <button
+                class="button button-secondary"
+                disabled={!zipEnabled || selectedCount === 0 || zipBusy}
+                on:click={createZipArchiveFromSelection}
+              >
+                {zipBusy ? "正在打包…" : "创建 ZIP"}
+              </button>
+              <p class="zip-note">ZIP 将保存到首个选中文件所在目录。</p>
             </div>
           </section>
         </div>
+
+        <section class="surface surface-log">
+          <button
+            type="button"
+            class="panel-toggle"
+            aria-expanded={logsExpanded}
+            on:click={() => (logsExpanded = !logsExpanded)}
+          >
+            <span class="panel-toggle-copy">
+              <span class="surface-kicker">Diagnostics</span>
+              <span class="panel-toggle-title">运行日志</span>
+            </span>
+            <span class="panel-toggle-meta">
+              <span class="log-badge">{logs.length}</span>
+              <span class="panel-toggle-state">{logsExpanded ? "收起" : "展开"}</span>
+              <svg
+                class="panel-chevron"
+                class:is-open={logsExpanded}
+                width="14"
+                height="14"
+                viewBox="0 0 14 14"
+                fill="none"
+                aria-hidden="true"
+              >
+                <path
+                  d="M3.5 5.25L7 8.75L10.5 5.25"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </span>
+          </button>
+
+          <div class="log-collapse" class:is-open={logsExpanded}>
+            <textarea
+              bind:this={logView}
+              readonly
+              placeholder="日志会显示在这里"
+              aria-label="运行日志"
+              on:scroll={handleLogScroll}
+              value={logs.join("\n")}
+            ></textarea>
+          </div>
+        </section>
       </div>
-    </section>
+    </main>
 
     {#if notice}
       <div class={`notice-banner notice-${notice.tone}`} role="status" aria-live="polite">
@@ -946,253 +996,290 @@
 {/if}
 
 <style lang="less">
-  .page-shell {
-    padding: 44px 32px 56px;
-  }
-
-  .hero-card,
-  .panel {
-    background: var(--panel-bg);
-    backdrop-filter: blur(14px);
-    border: 1px solid var(--panel-border);
-    border-radius: 28px;
-    box-shadow: var(--shadow);
-  }
-
-  .hero-card {
-    max-width: 1220px;
+  .workspace {
+    max-width: 1480px;
     margin: 0 auto;
-    padding: 36px 34px 40px;
+    padding: 28px 28px 40px;
+  }
+
+  .topbar {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 24px;
+    margin-bottom: 18px;
+  }
+
+  .eyebrow,
+  .surface-kicker {
+    margin: 0;
+    color: var(--accent-strong);
+    font-size: 11px;
+    font-weight: 800;
+    line-height: 1.1;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+  }
+
+  .brand-block h1 {
+    margin: 8px 0 0;
+    font-size: clamp(34px, 4vw, 52px);
+    line-height: 0.95;
+    letter-spacing: -0.055em;
+    font-weight: 800;
+  }
+
+  .subcopy {
+    max-width: 620px;
+    margin: 12px 0 0;
+    color: var(--muted);
+    font-size: 15px;
+    line-height: 1.55;
+  }
+
+  .hero-actions {
+    display: inline-flex;
+    gap: 12px;
+    align-items: center;
+    flex: 0 0 auto;
+  }
+
+  .hero-strip,
+  .surface {
     position: relative;
     overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: 24px;
+    background: rgba(255, 255, 255, 0.78);
+    box-shadow: var(--surface-shadow);
+    backdrop-filter: blur(12px);
   }
 
-  .hero-card::before {
+  .hero-strip {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 18px;
+    padding: 22px 24px;
+    margin-bottom: 18px;
+    background:
+      linear-gradient(135deg, rgba(9, 18, 26, 0.95) 0%, rgba(18, 38, 47, 0.88) 70%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent);
+    border-color: rgba(111, 216, 202, 0.15);
+    color: #eef7f5;
+    box-shadow: 0 24px 60px rgba(15, 23, 42, 0.22);
+  }
+
+  .hero-strip::after {
     content: "";
     position: absolute;
-    inset: 0;
-    background:
-      radial-gradient(circle at top right, rgba(47, 122, 118, 0.08), transparent 26%),
-      linear-gradient(180deg, rgba(255, 255, 255, 0.32), transparent 22%);
+    inset: auto -8% -45% auto;
+    width: 340px;
+    height: 340px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(98, 227, 211, 0.18), transparent 60%);
     pointer-events: none;
   }
 
-  .hero-bar {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 24px;
-    margin-bottom: 24px;
+  .hero-status-panel {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    gap: 10px;
   }
 
-  .hero-bar h1 {
+  .status-header {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    background: #8ea0ae;
+    box-shadow: 0 0 0 8px rgba(255, 255, 255, 0.05);
+  }
+
+  .status-dot.status-running {
+    background: #72e8d7;
+    animation: pulse-dot 1.4s ease-in-out infinite;
+  }
+
+  .status-dot.status-success {
+    background: #7fd8b4;
+  }
+
+  .status-dot.status-error {
+    background: #f29078;
+  }
+
+  .status-title {
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+  }
+
+  .status-copy {
     margin: 0;
-    font-size: 34px;
-    line-height: 1.05;
+    max-width: 580px;
+    color: rgba(238, 247, 245, 0.72);
+    line-height: 1.5;
+  }
+
+  .status-copy strong {
+    color: #fff;
+    font-weight: 800;
+  }
+
+  .status-progress {
+    width: min(100%, 420px);
+    height: 3px;
+    border-radius: 999px;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.12);
+  }
+
+  .status-progress-bar {
+    width: 32%;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, rgba(111, 216, 202, 0.22), rgba(111, 216, 202, 1));
+    animation: indeterminate 1.7s ease-in-out infinite;
+  }
+
+  .hero-stats {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(88px, 1fr));
+    gap: 10px;
+    margin: 0;
+  }
+
+  .hero-stats div {
+    min-width: 0;
+    padding-left: 14px;
+    border-left: 1px solid rgba(255, 255, 255, 0.12);
+  }
+
+  .hero-stats dt {
+    margin: 0 0 8px;
+    color: rgba(238, 247, 245, 0.62);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .hero-stats dd {
+    margin: 0;
+    color: #fff;
+    font-family: "SF Mono", "JetBrains Mono", "Menlo", monospace;
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.04em;
+  }
+
+  .workbench {
+    display: grid;
+    grid-template-columns: minmax(320px, 392px) minmax(0, 1fr);
+    gap: 18px;
+    align-items: start;
+  }
+
+  .workbench-main {
+    display: grid;
+    gap: 18px;
+  }
+
+  .surface {
+    padding: 22px 22px 20px;
+  }
+
+  .surface::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto;
+    height: 1px;
+    background: linear-gradient(90deg, rgba(79, 151, 145, 0.34), transparent 70%);
+    pointer-events: none;
+  }
+
+  .surface-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: end;
+    margin-bottom: 18px;
+  }
+
+  .surface-head h2 {
+    margin: 8px 0 0;
+    font-size: 24px;
+    line-height: 1;
     letter-spacing: -0.04em;
     font-weight: 800;
   }
 
-  .hero-copy {
-    margin: 10px 0 0;
-    font-size: 15px;
-  }
-
-  .panel-note {
-    margin: 6px 0 0;
-    max-width: 720px;
-    color: #6f7b8d;
-    font-size: 12.5px;
-    line-height: 1.55;
-  }
-
-  .hero-metrics {
-    display: grid;
-    gap: 10px;
-    min-width: 180px;
+  .surface-note {
+    margin: 0;
+    max-width: 220px;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.5;
     text-align: right;
   }
 
-  .hero-status {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 8px;
-    color: var(--primary);
-    font-weight: 700;
-    font-size: 15px;
-  }
-
-  .hero-status-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--primary);
-    flex: 0 0 auto;
-  }
-
-  .hero-status-dot.is-running {
-    animation: pulse-dot 1.4s ease-in-out infinite;
-  }
-
-  @keyframes pulse-dot {
-    0%,
-    100% {
-      opacity: 1;
-      transform: scale(1);
-    }
-
-    50% {
-      opacity: 0.4;
-      transform: scale(0.75);
-    }
-  }
-
-  .hero-rows {
-    color: var(--muted);
-    font-family: "SF Mono", "JetBrains Mono", "Menlo", monospace;
-    font-size: 15px;
-  }
-
-  .hero-progress {
-    height: 3px;
-    border-radius: 2px;
-    background: rgba(47, 122, 118, 0.12);
-    overflow: hidden;
-    margin-top: 4px;
-  }
-
-  .hero-progress-bar {
-    width: 30%;
-    height: 100%;
-    border-radius: 2px;
-    background: linear-gradient(90deg, var(--primary), #4ab0a8);
-    animation: indeterminate 1.6s ease-in-out infinite;
-  }
-
-  @keyframes indeterminate {
-    0% {
-      transform: translateX(-100%);
-    }
-
-    100% {
-      transform: translateX(430%);
-    }
-  }
-
-  .panel-grid {
-    display: grid;
-    grid-template-columns: minmax(340px, 400px) minmax(0, 1fr);
-    gap: 22px;
-    align-items: start;
-  }
-
-  .panel-stack {
-    display: grid;
-    gap: 8px;
-  }
-
-  .panel {
-    padding: 22px 20px 20px;
-    position: relative;
-    overflow: hidden;
-    background: linear-gradient(
-      180deg,
-      rgba(255, 255, 255, 0.96) 0%,
-      rgba(249, 251, 252, 0.92) 100%
-    );
-    border-color: rgba(148, 163, 184, 0.24);
-    box-shadow:
-      0 18px 38px rgba(148, 163, 184, 0.11),
-      inset 0 1px 0 rgba(255, 255, 255, 0.8);
-  }
-
-  .panel::before {
-    content: "";
-    position: absolute;
-    inset: 0 auto auto 0;
-    width: 100%;
-    height: 1px;
-    background: linear-gradient(90deg, rgba(47, 122, 118, 0.18), rgba(47, 122, 118, 0));
-    pointer-events: none;
-  }
-
-  .section-title {
-    margin: 0 0 18px;
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    font-size: 18px;
-    font-weight: 800;
-  }
-
-  .section-title-mark {
-    width: 10px;
-    height: 10px;
-    border-radius: 999px;
-    background: linear-gradient(180deg, rgba(47, 122, 118, 0.95) 0%, rgba(45, 94, 117, 0.82) 100%);
-    box-shadow:
-      0 0 0 4px rgba(47, 122, 118, 0.07),
-      0 4px 10px rgba(47, 122, 118, 0.14);
-    flex: 0 0 auto;
-  }
-
-  .field,
+  .parameter-grid,
   .field-row {
-    display: flex;
+    display: grid;
+    gap: 12px;
+  }
+
+  .parameter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .field-span-2 {
+    grid-column: 1 / -1;
   }
 
   .field {
-    flex-direction: column;
-    position: relative;
-    gap: 4px;
-    margin-bottom: 12px;
-  }
-
-  .field-row {
-    gap: 10px;
+    display: grid;
+    gap: 6px;
+    margin: 0;
   }
 
   .grow {
-    flex: 1;
+    min-width: 0;
   }
 
   .field-label {
-    color: #5a6478;
+    color: #5a6777;
     font-size: 12px;
-    font-weight: 700;
+    font-weight: 800;
     line-height: 1.1;
-    pointer-events: none;
-    padding-left: 3px;
+    letter-spacing: 0.01em;
+    padding-left: 2px;
   }
 
   .field-frame {
     position: relative;
     display: block;
-    padding: 8px 12px 6px;
-    border: 1px solid rgba(148, 163, 184, 0.28);
+    padding: 10px 12px 9px;
+    border: 1px solid var(--field-border);
     border-radius: 14px;
-    background: linear-gradient(
-      180deg,
-      rgba(247, 250, 252, 0.98) 0%,
-      rgba(255, 255, 255, 0.96) 100%
-    );
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.86),
-      0 6px 14px rgba(148, 163, 184, 0.07);
+    background: var(--field-bg);
     transition:
-      border-color 0.15s ease,
-      box-shadow 0.15s ease,
-      background-color 0.15s ease;
+      border-color 0.16s ease,
+      box-shadow 0.16s ease,
+      background-color 0.16s ease,
+      transform 0.16s ease;
   }
 
   .field:focus-within .field-frame {
-    border-color: rgba(47, 122, 118, 0.34);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.92),
-      0 0 0 3px rgba(47, 122, 118, 0.07),
-      0 8px 18px rgba(47, 122, 118, 0.06);
-    background: linear-gradient(180deg, rgba(248, 252, 251, 1) 0%, rgba(255, 255, 255, 1) 100%);
+    border-color: rgba(60, 139, 132, 0.54);
+    box-shadow: 0 0 0 4px rgba(60, 139, 132, 0.08);
+    background: #fff;
   }
 
   input,
@@ -1206,39 +1293,24 @@
   select,
   textarea {
     width: 100%;
-    padding: 1px 2px 2px;
-    border-radius: 10px;
+    padding: 0;
     border: none;
     background: transparent;
     color: var(--ink);
     outline: none;
-    box-shadow: none;
-    transition:
-      color 0.15s ease,
-      background-color 0.15s ease;
     appearance: none;
-  }
-
-  input:focus,
-  select:focus,
-  textarea:focus {
-    background: transparent;
   }
 
   input::placeholder,
   textarea::placeholder {
-    color: #b0b7c4;
-  }
-
-  input[type="number"] {
-    padding-right: 2px;
+    color: #97a3b2;
   }
 
   select {
-    padding-right: 30px;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'%3E%3Cpath d='M1 1.5L6 6.5L11 1.5' stroke='%23778292' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    padding-right: 26px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'%3E%3Cpath d='M1 1.5L6 6.5L11 1.5' stroke='%236a7283' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
-    background-position: right 1px center;
+    background-position: right center;
     background-size: 12px 8px;
   }
 
@@ -1246,15 +1318,11 @@
     padding-right: 28px;
   }
 
-  .compact-field {
-    margin-top: 12px;
-  }
-
   .field-visibility-toggle {
     position: absolute;
-    right: 1px;
+    right: 0;
     top: 50%;
-    transform: translateY(calc(-50% - 1px));
+    transform: translateY(-50%);
     width: 28px;
     height: 28px;
     display: inline-flex;
@@ -1264,20 +1332,18 @@
     border: none;
     border-radius: 8px;
     background: transparent;
-    color: #778292;
+    color: #8190a1;
     cursor: pointer;
-    opacity: 0.7;
   }
 
   .field-visibility-toggle:hover {
-    opacity: 1;
-    background: rgba(148, 163, 184, 0.12);
+    color: var(--accent-strong);
+    background: rgba(79, 151, 145, 0.08);
   }
 
   .field-visibility-toggle:focus-visible {
-    opacity: 1;
-    outline: 2px solid rgba(47, 122, 118, 0.28);
-    outline-offset: 1px;
+    outline: 2px solid rgba(79, 151, 145, 0.24);
+    outline-offset: 2px;
   }
 
   :global(.field-visibility-toggle svg) {
@@ -1294,210 +1360,43 @@
     stroke-linejoin: round;
   }
 
-  textarea {
-    min-height: 222px;
-    resize: vertical;
-    padding: 12px 14px;
-    font-family: "SF Mono", "JetBrains Mono", "Menlo", monospace;
-    font-size: 13px;
-    line-height: 1.5;
-    border: 1px solid rgba(148, 163, 184, 0.22);
-    border-color: rgba(148, 163, 184, 0.22);
-    background: rgba(248, 250, 251, 0.95);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
-  }
-
-  textarea:focus {
-    border-color: rgba(47, 122, 118, 0.52);
-    box-shadow: 0 0 0 4px rgba(47, 122, 118, 0.08);
-    background: #fff;
-  }
-
-  .panel-log {
-    padding: 16px;
-    border-color: rgba(47, 122, 118, 0.18);
-  }
-
-  .panel-toggle {
+  .inline-note-row {
     display: flex;
-    align-items: center;
     justify-content: space-between;
-    width: 100%;
-    gap: 12px;
-    padding: 12px 14px;
-    border: 1px solid rgba(148, 163, 184, 0.18);
-    border-radius: 16px;
-    background: linear-gradient(
-      180deg,
-      rgba(248, 250, 250, 0.96) 0%,
-      rgba(252, 253, 253, 0.98) 100%
-    );
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.84),
-      0 8px 18px rgba(148, 163, 184, 0.08);
-    color: inherit;
-    text-align: left;
-    cursor: pointer;
-    user-select: none;
-    margin: 0;
-    transition:
-      color 0.15s ease,
-      border-color 0.15s ease,
-      box-shadow 0.15s ease,
-      transform 0.15s ease;
-  }
-
-  .panel-toggle:hover {
-    color: var(--primary);
-    border-color: rgba(47, 122, 118, 0.24);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.88),
-      0 10px 20px rgba(47, 122, 118, 0.08);
-  }
-
-  .panel-toggle:focus-visible {
-    outline: none;
-    border-color: rgba(47, 122, 118, 0.4);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.88),
-      0 0 0 4px rgba(47, 122, 118, 0.08);
-  }
-
-  .panel-toggle-copy {
-    display: grid;
-    gap: 2px;
-  }
-
-  .panel-toggle-eyebrow {
-    display: none;
-  }
-
-  .panel-toggle-title {
-    font-size: 17px;
-    font-weight: 800;
-    line-height: 1;
-  }
-
-  .panel-toggle-meta {
-    display: inline-flex;
+    gap: 16px;
     align-items: center;
-    gap: 8px;
-    color: var(--muted);
-    flex: 0 0 auto;
-    justify-content: flex-end;
-  }
-
-  .panel-toggle-state {
-    font-size: 11.5px;
-    font-weight: 700;
-    min-width: 24px;
-    text-align: right;
-  }
-
-  .panel-chevron {
-    color: var(--muted);
-    transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1);
-    flex: 0 0 auto;
-    margin-left: 2px;
-  }
-
-  .panel-chevron.is-open {
-    transform: rotate(180deg);
-  }
-
-  .log-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 22px;
-    height: 22px;
-    padding: 0 7px;
-    border-radius: 999px;
-    background: rgba(47, 122, 118, 0.1);
-    color: var(--primary);
-    font-size: 11px;
-    font-weight: 800;
-    line-height: 1;
-  }
-
-  .log-collapse {
-    max-height: 0;
-    overflow: hidden;
-    transition: max-height 0.3s cubic-bezier(0.22, 1, 0.36, 1);
-  }
-
-  .log-collapse.is-open {
-    max-height: 400px;
     margin-top: 12px;
   }
 
-  .button-row {
-    display: flex;
-    gap: 10px;
-    margin-top: 14px;
+  .panel-note,
+  .output-preview,
+  .generated-meta,
+  .generated-file-meta,
+  .zip-note,
+  .empty-copy {
+    color: var(--muted);
+    font-size: 13px;
   }
 
-  .button {
-    border: none;
-    border-radius: 10px;
-    padding: 10px 17px;
-    cursor: pointer;
-    font-weight: 700;
-    font-size: 14px;
-    transition:
-      transform 0.15s ease,
-      opacity 0.15s ease,
-      filter 0.15s ease,
-      box-shadow 0.15s ease,
-      background-color 0.15s ease;
+  .panel-note,
+  .zip-note,
+  .empty-copy {
+    margin: 0;
+    line-height: 1.5;
   }
 
-  .button-icon {
-    margin-right: 5px;
+  .output-preview {
+    margin: 0;
+    max-width: 50%;
+    font-family: "SF Mono", "JetBrains Mono", "Menlo", monospace;
+    text-align: right;
+    overflow-wrap: anywhere;
   }
 
-  .button:hover:not(:disabled) {
-    transform: translateY(-1px);
-    filter: brightness(1.02);
-  }
-
-  .button:active:not(:disabled) {
-    transform: translateY(0);
-  }
-
-  .button:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-  }
-
-  .button-primary {
-    background: linear-gradient(180deg, #41958f 0%, #2f7a76 100%);
-    color: white;
-    box-shadow:
-      0 5px 14px rgba(47, 122, 118, 0.24),
-      inset 0 1px 0 rgba(255, 255, 255, 0.14);
-  }
-
-  .button-primary:hover:not(:disabled) {
-    box-shadow:
-      0 7px 18px rgba(47, 122, 118, 0.28),
-      inset 0 1px 0 rgba(255, 255, 255, 0.16);
-  }
-
-  .button-secondary {
-    background: rgba(255, 255, 255, 0.88);
-    color: var(--secondary);
-    border: 1px solid rgba(45, 94, 117, 0.28);
-  }
-
-  .button-secondary:hover:not(:disabled) {
-    background: rgba(45, 94, 117, 0.05);
-    border-color: rgba(45, 94, 117, 0.38);
-  }
-
-  .button-ghost {
-    background: rgba(148, 163, 184, 0.14);
-    color: var(--ink);
+  .result-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+    gap: 18px;
   }
 
   .generated-toolbar,
@@ -1510,59 +1409,40 @@
   }
 
   .generated-toolbar {
-    margin-bottom: 12px;
-  }
-
-  .master-checkbox span:last-child {
-    font-weight: 700;
-    color: var(--ink);
-  }
-
-  .generated-meta,
-  .zip-note,
-  .empty-copy,
-  .generated-file-meta {
-    color: var(--muted);
-    font-size: 13px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.16);
   }
 
   .generated-list {
     display: grid;
-    gap: 10px;
-    margin-bottom: 14px;
+    gap: 8px;
+    margin-top: 14px;
   }
 
   .generated-list.is-empty {
-    padding: 12px 0 4px;
+    min-height: 120px;
+    align-content: center;
   }
 
   .generated-item {
-    padding: 12px 14px;
-    border: 1px solid rgba(148, 163, 184, 0.24);
-    border-radius: 14px;
-    background: linear-gradient(
-      180deg,
-      rgba(255, 255, 255, 0.94) 0%,
-      rgba(249, 251, 252, 0.92) 100%
-    );
+    padding: 12px 0;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.14);
     transition:
-      border-color 0.15s ease,
-      box-shadow 0.15s ease,
-      transform 0.15s ease;
+      transform 0.18s ease,
+      color 0.18s ease;
+  }
+
+  .generated-item:last-child {
+    border-bottom: none;
   }
 
   .generated-item:hover {
-    border-color: rgba(47, 122, 118, 0.24);
-    box-shadow: 0 6px 18px rgba(148, 163, 184, 0.1);
+    transform: translateX(2px);
   }
 
-  .generated-item.is-selected {
-    border-color: rgba(47, 122, 118, 0.34);
-    background: linear-gradient(
-      180deg,
-      rgba(245, 251, 250, 0.98) 0%,
-      rgba(251, 252, 253, 0.96) 100%
-    );
+  .generated-item.is-selected .generated-file-copy strong,
+  .generated-item.is-selected .generated-file-meta {
+    color: var(--accent-strong);
   }
 
   .list-checkbox {
@@ -1573,22 +1453,13 @@
   }
 
   .list-checkbox input[type="checkbox"] {
-    width: 22px;
-    height: 22px;
-    min-width: 22px;
-    padding: 0;
+    width: 20px;
+    height: 20px;
+    min-width: 20px;
     margin: 0;
-    flex: 0 0 auto;
     border: 1px solid rgba(113, 129, 151, 0.54);
-    border-radius: 7px;
-    background: linear-gradient(
-      180deg,
-      rgba(255, 255, 255, 0.98) 0%,
-      rgba(241, 245, 249, 0.96) 100%
-    );
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.95),
-      0 1px 2px rgba(15, 23, 42, 0.08);
+    border-radius: 6px;
+    background: #fff;
     appearance: none;
     -webkit-appearance: none;
     cursor: pointer;
@@ -1601,58 +1472,45 @@
   }
 
   .list-checkbox input[type="checkbox"]:hover:not(:disabled) {
-    border-color: rgba(47, 122, 118, 0.52);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.96),
-      0 0 0 4px rgba(47, 122, 118, 0.08);
+    border-color: rgba(60, 139, 132, 0.62);
+    box-shadow: 0 0 0 4px rgba(60, 139, 132, 0.08);
   }
 
   .list-checkbox input[type="checkbox"]:focus-visible {
     outline: none;
-    border-color: rgba(47, 122, 118, 0.72);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.96),
-      0 0 0 4px rgba(47, 122, 118, 0.12);
+    border-color: rgba(60, 139, 132, 0.72);
+    box-shadow: 0 0 0 4px rgba(60, 139, 132, 0.1);
   }
 
   .list-checkbox input[type="checkbox"]:checked {
-    border-color: #2f7a76;
-    background: linear-gradient(180deg, #3e8f89 0%, #2f7a76 100%);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.18),
-      0 8px 14px rgba(47, 122, 118, 0.2);
+    border-color: var(--accent-strong);
+    background: var(--accent-strong);
   }
 
   .list-checkbox input[type="checkbox"]:checked::after {
     content: "";
     position: absolute;
-    left: 7px;
-    top: 3px;
-    width: 5px;
-    height: 10px;
+    left: 6px;
+    top: 2px;
+    width: 4px;
+    height: 9px;
     border: solid #fff;
-    border-width: 0 2.5px 2.5px 0;
+    border-width: 0 2px 2px 0;
     transform: rotate(45deg);
-  }
-
-  .list-checkbox input[type="checkbox"]:active:not(:disabled) {
-    transform: scale(0.96);
   }
 
   .list-checkbox input[type="checkbox"]:disabled {
     cursor: not-allowed;
-    opacity: 0.52;
-    box-shadow: none;
+    opacity: 0.45;
   }
 
-  .list-checkbox span:last-child {
-    line-height: 1.2;
+  .master-checkbox span:last-child,
+  .zip-toggle span:last-child {
+    font-weight: 700;
   }
 
   .generated-file-copy {
     min-width: 0;
-    display: flex;
-    align-items: center;
   }
 
   .generated-file-copy strong {
@@ -1666,77 +1524,197 @@
   }
 
   .generated-file-meta {
+    flex: 0 0 auto;
     white-space: nowrap;
     font-family: "SF Mono", "JetBrains Mono", "Menlo", monospace;
-    font-size: 11px;
   }
 
-  .zip-controls {
-    padding-top: 6px;
+  .surface-zip {
+    align-self: start;
   }
 
-  .zip-surface {
-    padding: 14px 16px 16px;
-    border: none;
-    border-left: 3px solid rgba(47, 122, 118, 0.22);
-    border-radius: 0 12px 12px 0;
-    background: rgba(247, 250, 250, 0.7);
+  .zip-toggle {
+    margin-top: 6px;
+  }
+
+  .compact-field {
+    margin-top: 14px;
   }
 
   .zip-actions {
-    margin-top: 12px;
-  }
-
-  .zip-note,
-  .empty-copy {
-    margin: 0;
+    align-items: flex-end;
+    margin-top: 16px;
   }
 
   .zip-note {
+    max-width: 180px;
     text-align: right;
   }
 
-  .fatal-error {
-    max-width: 960px;
-    margin: 40px auto;
-    white-space: pre-wrap;
+  .surface-log {
+    padding-top: 16px;
+  }
+
+  .panel-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    gap: 12px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .panel-toggle-copy {
+    display: grid;
+    gap: 6px;
+  }
+
+  .panel-toggle-title {
+    font-size: 24px;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -0.04em;
+  }
+
+  .panel-toggle-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--muted);
+  }
+
+  .panel-toggle-state {
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .panel-chevron {
+    transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .panel-chevron.is-open {
+    transform: rotate(180deg);
+  }
+
+  .log-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 24px;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: rgba(60, 139, 132, 0.1);
+    color: var(--accent-strong);
+    font-size: 11px;
+    font-weight: 800;
+  }
+
+  .log-collapse {
+    max-height: 0;
+    overflow: hidden;
+    transition:
+      max-height 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+      margin-top 0.28s ease;
+  }
+
+  .log-collapse.is-open {
+    max-height: 420px;
+    margin-top: 16px;
+  }
+
+  textarea {
+    min-height: 240px;
+    resize: vertical;
+    padding: 14px 16px;
+    border: 1px solid var(--field-border);
+    border-radius: 16px;
+    background: rgba(247, 249, 251, 0.9);
+    font-family: "SF Mono", "JetBrains Mono", "Menlo", monospace;
+    font-size: 12.5px;
+    line-height: 1.55;
+  }
+
+  textarea:focus {
+    border-color: rgba(60, 139, 132, 0.56);
+    box-shadow: 0 0 0 4px rgba(60, 139, 132, 0.08);
+    background: #fff;
+  }
+
+  .button {
+    border: none;
+    border-radius: 12px;
+    padding: 12px 18px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    transition:
+      transform 0.14s ease,
+      background-color 0.14s ease,
+      border-color 0.14s ease,
+      box-shadow 0.14s ease,
+      opacity 0.14s ease;
+  }
+
+  .button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .button:hover:not(:disabled) {
+    transform: translateY(-1px);
+  }
+
+  .button-icon {
+    margin-right: 5px;
+  }
+
+  .button-primary {
+    background: linear-gradient(180deg, #56aaa0 0%, #3c8b84 100%);
+    color: #fff;
+    box-shadow: 0 12px 24px rgba(60, 139, 132, 0.24);
+  }
+
+  .button-secondary {
+    border: 1px solid rgba(19, 35, 63, 0.12);
+    background: rgba(255, 255, 255, 0.78);
+    color: var(--ink);
+  }
+
+  .button-ghost {
+    background: rgba(148, 163, 184, 0.14);
+    color: var(--ink);
   }
 
   .notice-banner {
     position: fixed;
     left: 50%;
-    bottom: 28px;
+    bottom: 24px;
     z-index: 1000;
     display: flex;
     align-items: center;
     gap: 12px;
-    min-width: min(460px, calc(100vw - 32px));
+    min-width: min(420px, calc(100vw - 32px));
     max-width: calc(100vw - 32px);
     padding: 12px 16px;
-    border-radius: 8px;
+    border-radius: 12px;
     box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
     color: #fff;
-    animation: notice-in 0.32s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
-  }
-
-  @keyframes notice-in {
-    from {
-      transform: translateX(-50%) translateY(24px);
-      opacity: 0;
-    }
-
-    to {
-      transform: translateX(-50%) translateY(0);
-      opacity: 1;
-    }
+    animation: notice-in 0.28s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
   }
 
   .notice-error {
-    background: linear-gradient(135deg, #c94e3c 0%, #c24133 100%);
+    background: linear-gradient(135deg, #d65d48 0%, #c24133 100%);
   }
 
   .notice-success {
-    background: linear-gradient(135deg, #2f7a76 0%, #2a6764 100%);
+    background: linear-gradient(135deg, #3c8b84 0%, #2f6f69 100%);
   }
 
   .notice-icon {
@@ -1765,27 +1743,24 @@
     align-items: center;
     justify-content: center;
     padding: 24px;
-    background: rgba(15, 23, 42, 0.18);
+    background: rgba(15, 23, 42, 0.28);
     backdrop-filter: blur(10px);
   }
 
   .dialog-card {
     width: min(560px, 100%);
     padding: 24px;
-    border: 1px solid rgba(148, 163, 184, 0.18);
-    border-radius: 22px;
-    background: linear-gradient(
-      180deg,
-      rgba(253, 254, 254, 0.98) 0%,
-      rgba(246, 249, 249, 0.96) 100%
-    );
-    box-shadow: 0 28px 60px rgba(15, 23, 42, 0.18);
+    border: 1px solid var(--line);
+    border-radius: 24px;
+    background: rgba(251, 252, 253, 0.96);
+    box-shadow: 0 28px 60px rgba(15, 23, 42, 0.22);
   }
 
   .dialog-card h3 {
     margin: 0 0 10px;
-    font-size: 20px;
+    font-size: 22px;
     font-weight: 800;
+    letter-spacing: -0.03em;
   }
 
   .dialog-copy {
@@ -1806,7 +1781,7 @@
     padding: 12px 14px;
     border: 1px solid rgba(148, 163, 184, 0.18);
     border-radius: 14px;
-    background: rgba(255, 255, 255, 0.72);
+    background: rgba(255, 255, 255, 0.74);
   }
 
   .dialog-path-row span {
@@ -1829,36 +1804,82 @@
     margin-top: 18px;
   }
 
-  .is-entering .panel {
-    animation: panel-in 0.38s cubic-bezier(0.22, 1, 0.36, 1) both;
+  .fatal-error {
+    max-width: 960px;
+    margin: 40px auto;
+    white-space: pre-wrap;
   }
 
-  .is-entering .panel-stack .panel:nth-child(1) {
-    animation-delay: 0.04s;
+  .is-entering .hero-strip,
+  .is-entering .surface {
+    animation: panel-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
-  .is-entering .panel-stack .panel:nth-child(2) {
+  .is-entering .surface-export {
+    animation-delay: 0.05s;
+  }
+
+  .is-entering .surface-files {
     animation-delay: 0.1s;
   }
 
-  .is-entering .panel-stack .panel:nth-child(3) {
-    animation-delay: 0.16s;
+  .is-entering .surface-zip {
+    animation-delay: 0.15s;
+  }
+
+  .is-entering .surface-log {
+    animation-delay: 0.2s;
+  }
+
+  .is-entering .generated-item {
+    animation: item-in 0.28s ease both;
+  }
+
+  @keyframes pulse-dot {
+    0%,
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+
+    50% {
+      opacity: 0.45;
+      transform: scale(0.82);
+    }
+  }
+
+  @keyframes indeterminate {
+    0% {
+      transform: translateX(-100%);
+    }
+
+    100% {
+      transform: translateX(430%);
+    }
+  }
+
+  @keyframes notice-in {
+    from {
+      transform: translateX(-50%) translateY(22px);
+      opacity: 0;
+    }
+
+    to {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+    }
   }
 
   @keyframes panel-in {
     from {
       opacity: 0;
-      transform: translateY(12px);
+      transform: translateY(14px);
     }
 
     to {
       opacity: 1;
       transform: translateY(0);
     }
-  }
-
-  .is-entering .generated-item {
-    animation: item-in 0.28s ease both;
   }
 
   @keyframes item-in {
@@ -1873,47 +1894,57 @@
     }
   }
 
-  @media (max-width: 1120px) {
-    .hero-bar,
-    .panel-grid {
-      display: grid;
+  @media (max-width: 1220px) {
+    .workbench,
+    .result-grid,
+    .hero-strip {
       grid-template-columns: 1fr;
     }
 
-    .hero-metrics {
-      text-align: left;
+    .hero-stats {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
-    .hero-status {
-      justify-content: flex-start;
+    .surface-note {
+      max-width: none;
+      text-align: left;
     }
   }
 
-  @media (max-width: 720px) {
-    .page-shell {
-      padding: 16px;
+  @media (max-width: 820px) {
+    .workspace {
+      padding: 16px 16px 28px;
     }
 
-    .hero-card,
-    .panel {
-      padding: 20px;
-      border-radius: 22px;
+    .topbar,
+    .surface-head,
+    .inline-note-row,
+    .zip-actions,
+    .generated-item,
+    .dialog-actions {
+      display: grid;
     }
 
-    .hero-bar h1 {
-      font-size: 30px;
+    .hero-actions {
+      width: 100%;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
     }
 
+    .parameter-grid,
     .field-row,
-    .button-row,
-    .generated-item,
-    .zip-actions {
-      flex-direction: column;
+    .hero-stats {
+      grid-template-columns: 1fr;
     }
 
-    .generated-item,
-    .zip-actions {
-      align-items: flex-start;
+    .output-preview,
+    .zip-note {
+      max-width: none;
+      text-align: left;
+    }
+
+    .hero-actions .button {
+      width: 100%;
     }
 
     .notice-banner {
@@ -1922,11 +1953,6 @@
       bottom: 16px;
       transform: none;
       min-width: 0;
-    }
-
-    .dialog-actions {
-      flex-direction: column-reverse;
-      align-items: stretch;
     }
   }
 </style>

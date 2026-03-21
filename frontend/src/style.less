@@ -23,19 +23,16 @@
 }
 
 :root {
-  --bg-top: #ecf4f4;
-  --bg-bottom: #f5f7f7;
-  --panel-bg: rgba(252, 253, 253, 0.9);
-  --panel-border: rgba(148, 163, 184, 0.12);
-  --field-bg: rgba(255, 255, 255, 0.92);
-  --field-border: rgba(148, 163, 184, 0.35);
-  --field-border-strong: rgba(148, 163, 184, 0.5);
+  --bg-top: #edf2f2;
+  --bg-bottom: #f6f7f5;
+  --field-bg: rgba(255, 255, 255, 0.88);
+  --field-border: rgba(148, 163, 184, 0.28);
   --ink: #13233f;
   --muted: #6a7283;
-  --primary: #2f7a76;
-  --secondary: #2d5e76;
+  --accent-strong: #3c8b84;
   --danger: #c84f3d;
-  --shadow: 0 22px 55px rgba(148, 163, 184, 0.16);
+  --line: rgba(148, 163, 184, 0.16);
+  --surface-shadow: 0 16px 38px rgba(148, 163, 184, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.7);
 }
 
 * {
@@ -50,8 +47,9 @@ body,
 
 html {
   background:
-    radial-gradient(circle at top left, rgba(47, 122, 118, 0.12), transparent 24%),
-    radial-gradient(circle at bottom right, rgba(115, 144, 168, 0.12), transparent 22%),
+    radial-gradient(circle at top left, rgba(60, 139, 132, 0.1), transparent 24%),
+    radial-gradient(circle at 82% 18%, rgba(19, 35, 63, 0.08), transparent 22%),
+    radial-gradient(circle at bottom right, rgba(125, 145, 168, 0.1), transparent 22%),
     linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
 }
 
@@ -59,6 +57,8 @@ body {
   margin: 0;
   color: var(--ink);
   font-family: "Nunito", "Avenir Next", "PingFang SC", "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 #app {
