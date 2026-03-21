@@ -6,6 +6,10 @@ export function CheckExportOutput(arg1) {
   return window['go']['main']['App']['CheckExportOutput'](arg1);
 }
 
+export function ClearGeneratedFiles() {
+  return window['go']['main']['App']['ClearGeneratedFiles']();
+}
+
 export function CreateZipArchive(arg1) {
   return window['go']['main']['App']['CreateZipArchive'](arg1);
 }

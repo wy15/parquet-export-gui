@@ -4,6 +4,7 @@
   import type { appcore } from "../wailsjs/go/models";
   import {
     CheckExportOutput,
+    ClearGeneratedFiles,
     CreateZipArchive,
     GetConfig,
     GetGeneratedFiles,
@@ -67,6 +68,8 @@
   let logsExpanded = false;
   let zipEnabled = false;
   let zipPassword = "";
+  let configDialogOpen = false;
+  let configDraft: ExportRequest | null = null;
   let visibility: VisibilityState = {
     password: false,
     maxcomputeAccessKey: false,
@@ -102,9 +105,16 @@
   $: isOracle = form.backend === "oracle";
   $: isMaxCompute = form.backend === "maxcompute";
   $: isOracleSchemaMode = isOracle && form.exportMode === "schema";
+  $: dialogForm = configDraft ?? form;
+  $: dialogIsOracle = dialogForm.backend === "oracle";
+  $: dialogIsMaxCompute = dialogForm.backend === "maxcompute";
+  $: dialogIsOracleSchemaMode = dialogIsOracle && dialogForm.exportMode === "schema";
   $: allSelected = generatedFiles.length > 0 && selectedFiles.length === generatedFiles.length;
   $: selectedCount = selectedFiles.length;
   $: backendLabel = backends.find((option) => option.value === form.backend)?.label ?? form.backend;
+  $: connectionSummary = isMaxCompute
+    ? [form.maxcomputeProject, form.maxcomputeEndpoint].filter(Boolean).join(" · ")
+    : [form.host, form.database].filter(Boolean).join(" · ");
   $: statusTone = running
     ? "running"
     : status.includes("失败")
@@ -220,10 +230,25 @@
     };
   }
 
+  function updateConfigDraft(patch: Partial<ExportRequest>) {
+    if (!configDraft) {
+      return;
+    }
+
+    configDraft = {
+      ...configDraft,
+      ...patch,
+    };
+  }
+
   function handleBackendChange(event: Event) {
+    if (!configDraft) {
+      return;
+    }
+
     const backend = (event.currentTarget as HTMLSelectElement).value;
-    const exportMode = backend === "oracle" ? form.exportMode || "table" : "table";
-    updateForm({
+    const exportMode = backend === "oracle" ? configDraft.exportMode || "table" : "table";
+    updateConfigDraft({
       backend,
       exportMode,
       port: defaultPorts[backend] ?? 0,
@@ -231,44 +256,62 @@
   }
 
   function handleExportModeChange(event: Event) {
+    if (!configDraft) {
+      return;
+    }
+
     const exportMode = (event.currentTarget as HTMLSelectElement).value;
     if (exportMode === "schema") {
-      updateForm({
+      updateConfigDraft({
         exportMode,
-        outputPath: replaceOutputDirectory(form.outputPath, form.schema),
+        outputPath: replaceOutputDirectory(configDraft.outputPath, configDraft.schema),
       });
       return;
     }
 
-    updateForm({
+    updateConfigDraft({
       exportMode,
-      outputPath: replaceOutputFilename(form.outputPath, form.table),
+      outputPath: replaceOutputFilename(configDraft.outputPath, configDraft.table),
     });
   }
 
   function handleTableInput(event: Event) {
+    if (!configDraft) {
+      return;
+    }
+
     const table = (event.currentTarget as HTMLInputElement).value;
-    updateForm({
+    updateConfigDraft({
       table,
-      outputPath: isOracleSchemaMode
-        ? form.outputPath
-        : replaceOutputFilename(form.outputPath, table),
+      outputPath: dialogIsOracleSchemaMode
+        ? configDraft.outputPath
+        : replaceOutputFilename(configDraft.outputPath, table),
     });
   }
 
   function handleSchemaInput(event: Event) {
+    if (!configDraft) {
+      return;
+    }
+
     const schema = (event.currentTarget as HTMLInputElement).value;
-    updateForm({
+    updateConfigDraft({
       schema,
-      outputPath: isOracleSchemaMode
-        ? replaceOutputDirectory(form.outputPath, schema)
-        : form.outputPath,
+      outputPath: dialogIsOracleSchemaMode
+        ? replaceOutputDirectory(configDraft.outputPath, schema)
+        : configDraft.outputPath,
     });
   }
 
   function handlePortInput(event: Event) {
     const value = Number((event.currentTarget as HTMLInputElement).value);
-    updateForm({ port: Number.isFinite(value) ? value : 0 });
+    updateConfigDraft({ port: Number.isFinite(value) ? value : 0 });
+  }
+
+  function handleConfigTextInput(field: keyof ExportRequest, event: Event) {
+    updateConfigDraft({
+      [field]: (event.currentTarget as HTMLInputElement).value,
+    } as Partial<ExportRequest>);
   }
 
   function handleBatchSizeInput(event: Event) {
@@ -365,16 +408,16 @@
     }
   }
 
-  function sanitizeRequest(): ExportRequest {
-    const exportMode = form.backend === "oracle" ? form.exportMode || "table" : "table";
+  function sanitizeRequest(request: ExportRequest = form): ExportRequest {
+    const exportMode = request.backend === "oracle" ? request.exportMode || "table" : "table";
     return {
-      ...form,
+      ...request,
       exportMode,
-      conflictPolicy: isOracleSchemaRequest(form)
-        ? form.conflictPolicy || "rename"
-        : form.conflictPolicy,
-      batchSize: Number(form.batchSize) || 1,
-      port: Number(form.port) || 0,
+      conflictPolicy: isOracleSchemaRequest(request)
+        ? request.conflictPolicy || "rename"
+        : request.conflictPolicy,
+      batchSize: Number(request.batchSize) || 1,
+      port: Number(request.port) || 0,
     };
   }
 
@@ -421,6 +464,19 @@
       )
       .map((file) => file.path);
     selectionInitialized = true;
+  }
+
+  async function clearGeneratedFilesList() {
+    await ClearGeneratedFiles();
+    generatedFiles = [];
+    selectedFiles = [];
+    selectionInitialized = true;
+    zipEnabled = false;
+    zipPassword = "";
+    visibility = {
+      ...visibility,
+      zipPassword: false,
+    };
   }
 
   function handleSelectAllChange(event: Event) {
@@ -505,6 +561,48 @@
       window.clearTimeout(noticeTimer);
       noticeTimer = null;
     }
+  }
+
+  function openConfigDialog() {
+    configDraft = { ...form };
+    configDialogOpen = true;
+  }
+
+  function closeConfigDialog() {
+    configDialogOpen = false;
+    configDraft = null;
+  }
+
+  function onConfigBackdropClick(event: MouseEvent) {
+    if (event.target === event.currentTarget) {
+      closeConfigDialog();
+    }
+  }
+
+  function onConfigBackdropKeydown(event: KeyboardEvent) {
+    if (event.target !== event.currentTarget) {
+      return;
+    }
+
+    if (event.key === "Enter" || event.key === " " || event.key === "Escape") {
+      event.preventDefault();
+      closeConfigDialog();
+    }
+  }
+
+  function saveConfigDialog() {
+    if (!configDraft) {
+      closeConfigDialog();
+      return;
+    }
+
+    form = sanitizeRequest(configDraft);
+    closeConfigDialog();
+  }
+
+  async function saveConfigAndTest() {
+    saveConfigDialog();
+    await startTask("test");
   }
 
   function onConflictBackdropClick(event: MouseEvent) {
@@ -627,10 +725,17 @@
       <div class="brand-block">
         <p class="eyebrow">Parquet Export Studio</p>
         <h1>导出工作台</h1>
-        <p class="subcopy">Oracle 支持单表和按 Schema 导出，其它数据源支持单表导出。</p>
+        <p class="subcopy">将数据库表导出为 Parquet 文件。</p>
       </div>
 
       <div class="hero-actions">
+        <button
+          class="button button-secondary"
+          disabled={running}
+          on:click={openConfigDialog}
+        >
+          配置数据源
+        </button>
         <button
           class="button button-secondary"
           disabled={running}
@@ -652,6 +757,9 @@
         </div>
         <p class="status-copy">
           当前数据源 <strong>{backendLabel}</strong>
+          {#if connectionSummary}
+            ，连接信息 <strong>{connectionSummary}</strong>
+          {/if}
           {#if isOracleSchemaMode && form.schema}
             ，目标 Schema <strong>{form.schema}</strong>
           {:else if form.table}
@@ -682,202 +790,21 @@
     </section>
 
     <main class="workbench">
-      <section class="surface surface-source">
-        <div class="surface-head">
-          <div>
-            <p class="surface-kicker">Source</p>
-            <h2>连接配置</h2>
-          </div>
-          <p class="surface-note">配置数据源与导出表。</p>
-        </div>
-
-        <label class="field field-select">
-          <span class="field-label">数据源</span>
-          <span class="field-frame">
-            <select value={form.backend} on:change={handleBackendChange}>
-              {#each backends as option (option.value)}
-                <option value={option.value}>{option.label}</option>
-              {/each}
-            </select>
-          </span>
-        </label>
-
-        {#if isMaxCompute}
-          <label class="field">
-            <span class="field-label">Endpoint</span>
-            <span class="field-frame">
-              <input
-                bind:value={form.maxcomputeEndpoint}
-                placeholder="https://service.cn-hangzhou.maxcompute.aliyun.com/api"
-              />
-            </span>
-          </label>
-
-          <label class="field">
-            <span class="field-label">Project</span>
-            <span class="field-frame">
-              <input bind:value={form.maxcomputeProject} />
-            </span>
-          </label>
-
-          <div class="field-row">
-            <label class="field grow">
-              <span class="field-label">Access ID</span>
-              <span class="field-frame">
-                <input bind:value={form.maxcomputeAccessId} />
-              </span>
-            </label>
-
-            <label class="field grow field-password">
-              <span class="field-label">Access Key</span>
-              <span class="field-frame">
-                <input
-                  bind:value={form.maxcomputeAccessKey}
-                  type={fieldInputType("maxcomputeAccessKey")}
-                />
-                <button
-                  type="button"
-                  class="field-visibility-toggle"
-                  aria-label={visibility.maxcomputeAccessKey ? "隐藏" : "显示"}
-                  aria-pressed={visibility.maxcomputeAccessKey}
-                  title={visibility.maxcomputeAccessKey ? "隐藏" : "显示"}
-                  on:click={() => toggleVisibility("maxcomputeAccessKey")}
-                >
-                  <svg viewBox="0 0 20 20" aria-hidden="true">
-                    <path
-                      d="M2.4 10C3.86 6.95 6.66 5 10 5C13.34 5 16.14 6.95 17.6 10C16.14 13.05 13.34 15 10 15C6.66 15 3.86 13.05 2.4 10Z"
-                    />
-                    <circle cx="10" cy="10" r="2.4" />
-                    {#if !visibility.maxcomputeAccessKey}
-                      <path d="M4 4L16 16" />
-                    {/if}
-                  </svg>
-                </button>
-              </span>
-            </label>
-          </div>
-
-          <div class="field-row">
-            <label class="field grow">
-              <span class="field-label">Schema (optional)</span>
-              <span class="field-frame">
-                <input bind:value={form.schema} />
-              </span>
-            </label>
-
-            <label class="field grow">
-              <span class="field-label">Table</span>
-              <span class="field-frame">
-                <input value={form.table} on:input={handleTableInput} />
-              </span>
-            </label>
-          </div>
-
-          <label class="field">
-            <span class="field-label">Partition Spec (optional)</span>
-            <span class="field-frame">
-              <input bind:value={form.partitionSpec} placeholder="ds='2026-03-07', region='cn'" />
-            </span>
-          </label>
-        {:else}
-          <label class="field">
-            <span class="field-label">Host</span>
-            <span class="field-frame">
-              <input bind:value={form.host} />
-            </span>
-          </label>
-
-          <div class="field-row">
-            <label class="field grow">
-              <span class="field-label">Port</span>
-              <span class="field-frame">
-                <input type="number" value={form.port} on:input={handlePortInput} />
-              </span>
-            </label>
-
-            <label class="field grow">
-              <span class="field-label">Database / Service</span>
-              <span class="field-frame">
-                <input bind:value={form.database} />
-              </span>
-            </label>
-          </div>
-
-          <div class="field-row">
-            <label class="field grow">
-              <span class="field-label">Username</span>
-              <span class="field-frame">
-                <input bind:value={form.username} />
-              </span>
-            </label>
-
-            <label class="field grow field-password">
-              <span class="field-label">Password</span>
-              <span class="field-frame">
-                <input bind:value={form.password} type={fieldInputType("password")} />
-                <button
-                  type="button"
-                  class="field-visibility-toggle"
-                  aria-label={visibility.password ? "隐藏" : "显示"}
-                  aria-pressed={visibility.password}
-                  title={visibility.password ? "隐藏" : "显示"}
-                  on:click={() => toggleVisibility("password")}
-                >
-                  <svg viewBox="0 0 20 20" aria-hidden="true">
-                    <path
-                      d="M2.4 10C3.86 6.95 6.66 5 10 5C13.34 5 16.14 6.95 17.6 10C16.14 13.05 13.34 15 10 15C6.66 15 3.86 13.05 2.4 10Z"
-                    />
-                    <circle cx="10" cy="10" r="2.4" />
-                    {#if !visibility.password}
-                      <path d="M4 4L16 16" />
-                    {/if}
-                  </svg>
-                </button>
-              </span>
-            </label>
-          </div>
-
-          {#if isOracle}
-            <label class="field field-select">
-              <span class="field-label">导出模式</span>
-              <span class="field-frame">
-                <select value={form.exportMode} on:change={handleExportModeChange}>
-                  <option value="table">单表导出</option>
-                  <option value="schema">按 Schema 导出全部表</option>
-                </select>
-              </span>
-            </label>
-          {/if}
-
-          <div class:is-schema-mode={isOracleSchemaMode} class="field-row schema-row">
-            <label class="field grow">
-              <span class="field-label">{isOracleSchemaMode ? "Schema" : "Schema (optional)"}</span>
-              <span class="field-frame">
-                <input value={form.schema} on:input={handleSchemaInput} />
-              </span>
-            </label>
-
-            {#if !isOracleSchemaMode}
-              <label class="field grow">
-                <span class="field-label">Table</span>
-                <span class="field-frame">
-                  <input value={form.table} on:input={handleTableInput} />
-                </span>
-              </label>
-            {/if}
-          </div>
-        {/if}
-      </section>
-
       <div class="workbench-main">
-        <section class="surface surface-export">
+        <section class="surface surface-export surface-form">
           <div class="surface-head">
             <div>
-              <p class="surface-kicker">Export</p>
               <h2>导出参数</h2>
             </div>
             <p class="surface-note">设置输出路径、批次大小和压缩方式。</p>
           </div>
+
+          {#if isOracleSchemaMode}
+            <div class="mode-banner">
+              <span class="mode-badge">Schema 模式</span>
+              <p>当前将按 Schema 批量导出到目标目录。</p>
+            </div>
+          {/if}
 
           <div class="parameter-grid">
             <label class="field field-span-2">
@@ -926,17 +853,16 @@
           </div>
         </section>
 
-        <div class="result-grid">
-          <section class="surface surface-files">
-            <div class="surface-head">
-              <div>
-                <p class="surface-kicker">Outputs</p>
-                <h2>本次生成的 Parquet</h2>
-              </div>
-              <p class="surface-note">查看本次会话生成的文件。</p>
+        <section class="surface surface-files">
+          <div class="surface-head">
+            <div>
+              <h2>本次生成的 Parquet</h2>
             </div>
+            <p class="surface-note">查看本次会话生成的文件，并继续打包。</p>
+          </div>
 
-            <div class="generated-toolbar">
+          <div class="generated-toolbar">
+            <div class="generated-toolbar-main">
               <label class="list-checkbox master-checkbox">
                 <input
                   type="checkbox"
@@ -949,7 +875,16 @@
               </label>
               <span class="generated-meta">已选 {selectedCount} / {generatedFiles.length}</span>
             </div>
+            <button
+              class="button button-ghost button-inline"
+              disabled={generatedFiles.length === 0}
+              on:click={clearGeneratedFilesList}
+            >
+              清空列表
+            </button>
+          </div>
 
+          <div class="output-section">
             <div class="generated-list" class:is-empty={generatedFiles.length === 0}>
               {#if generatedFiles.length === 0}
                 <p class="empty-copy">当前会话还没有导出文件。</p>
@@ -975,70 +910,69 @@
                 {/each}
               {/if}
             </div>
-          </section>
 
-          <section class="surface surface-zip">
-            <div class="surface-head">
-              <div>
-                <p class="surface-kicker">Archive</p>
-                <h2>ZIP 打包</h2>
+            <div class="zip-inline">
+              <div class="zip-inline-head">
+                <div>
+                  <h3>ZIP 打包</h3>
+                  <p>将选中文件打包为 ZIP。</p>
+                </div>
               </div>
-              <p class="surface-note">将选中文件打包为 ZIP。</p>
-            </div>
 
-            <label class="list-checkbox zip-toggle">
-              <input
-                type="checkbox"
-                checked={zipEnabled}
-                disabled={generatedFiles.length === 0}
-                on:change={handleZipEnabledChange}
-              />
-              <span>启用 ZIP 压缩</span>
-            </label>
-
-            {#if zipEnabled}
-              <label class="field field-password compact-field">
-                <span class="field-label">加密密码（可选）</span>
-                <span class="field-frame">
-                  <input
-                    bind:value={zipPassword}
-                    type={fieldInputType("zipPassword")}
-                    placeholder="留空则生成不加密 ZIP"
-                  />
-                  <button
-                    type="button"
-                    class="field-visibility-toggle"
-                    aria-label={visibility.zipPassword ? "隐藏" : "显示"}
-                    aria-pressed={visibility.zipPassword}
-                    title={visibility.zipPassword ? "隐藏" : "显示"}
-                    on:click={() => toggleVisibility("zipPassword")}
-                  >
-                    <svg viewBox="0 0 20 20" aria-hidden="true">
-                      <path
-                        d="M2.4 10C3.86 6.95 6.66 5 10 5C13.34 5 16.14 6.95 17.6 10C16.14 13.05 13.34 15 10 15C6.66 15 3.86 13.05 2.4 10Z"
-                      />
-                      <circle cx="10" cy="10" r="2.4" />
-                      {#if !visibility.zipPassword}
-                        <path d="M4 4L16 16" />
-                      {/if}
-                    </svg>
-                  </button>
-                </span>
+              <label class="list-checkbox zip-toggle">
+                <input
+                  type="checkbox"
+                  checked={zipEnabled}
+                  disabled={generatedFiles.length === 0}
+                  on:change={handleZipEnabledChange}
+                />
+                <span>启用 ZIP 压缩</span>
               </label>
-            {/if}
 
-            <div class="zip-actions">
-              <button
-                class="button button-secondary"
-                disabled={!zipEnabled || selectedCount === 0 || zipBusy}
-                on:click={createZipArchiveFromSelection}
-              >
-                {zipBusy ? "正在打包…" : "创建 ZIP"}
-              </button>
-              <p class="zip-note">ZIP 将保存到首个选中文件所在目录。</p>
+              {#if zipEnabled}
+                <label class="field field-password compact-field">
+                  <span class="field-label">加密密码（可选）</span>
+                  <span class="field-frame">
+                    <input
+                      bind:value={zipPassword}
+                      type={fieldInputType("zipPassword")}
+                      placeholder="留空则生成不加密 ZIP"
+                    />
+                    <button
+                      type="button"
+                      class="field-visibility-toggle"
+                      aria-label={visibility.zipPassword ? "隐藏" : "显示"}
+                      aria-pressed={visibility.zipPassword}
+                      title={visibility.zipPassword ? "隐藏" : "显示"}
+                      on:click={() => toggleVisibility("zipPassword")}
+                    >
+                      <svg viewBox="0 0 20 20" aria-hidden="true">
+                        <path
+                          d="M2.4 10C3.86 6.95 6.66 5 10 5C13.34 5 16.14 6.95 17.6 10C16.14 13.05 13.34 15 10 15C6.66 15 3.86 13.05 2.4 10Z"
+                        />
+                        <circle cx="10" cy="10" r="2.4" />
+                        {#if !visibility.zipPassword}
+                          <path d="M4 4L16 16" />
+                        {/if}
+                      </svg>
+                    </button>
+                  </span>
+                </label>
+              {/if}
+
+              <div class="zip-actions">
+                <button
+                  class="button button-secondary"
+                  disabled={!zipEnabled || selectedCount === 0 || zipBusy}
+                  on:click={createZipArchiveFromSelection}
+                >
+                  {zipBusy ? "正在打包…" : "创建 ZIP"}
+                </button>
+                <p class="zip-note">ZIP 将保存到首个选中文件所在目录。</p>
+              </div>
             </div>
-          </section>
-        </div>
+          </div>
+        </section>
 
         <section class="surface surface-log">
           <button
@@ -1048,7 +982,6 @@
             on:click={() => (logsExpanded = !logsExpanded)}
           >
             <span class="panel-toggle-copy">
-              <span class="surface-kicker">Diagnostics</span>
               <span class="panel-toggle-title">运行日志</span>
             </span>
             <span class="panel-toggle-meta">
@@ -1092,6 +1025,239 @@
       <div class={`notice-banner notice-${notice.tone}`} role="status" aria-live="polite">
         <span class="notice-icon" aria-hidden="true">{notice.tone === "success" ? "✓" : "⚠"}</span>
         <span class="notice-message">{notice.message}</span>
+      </div>
+    {/if}
+
+    {#if configDialogOpen}
+      <div
+        class="dialog-backdrop"
+        role="button"
+        tabindex="0"
+        aria-label="关闭数据源配置对话框"
+        on:click={onConfigBackdropClick}
+        on:keydown={onConfigBackdropKeydown}
+      >
+        <div
+          class="dialog-card dialog-card-wide"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="configDialogTitle"
+        >
+          <div class="dialog-head">
+            <div>
+              <h3 id="configDialogTitle">配置数据源</h3>
+              <p class="dialog-copy">设置连接信息与导出目标，保存后返回工作台继续执行。</p>
+            </div>
+          </div>
+
+          <div class="dialog-form dialog-form-grid surface-form">
+            <label class="field field-select grow">
+              <span class="field-label">数据源</span>
+              <span class="field-frame">
+                <select value={dialogForm.backend} on:change={handleBackendChange}>
+                  {#each backends as option (option.value)}
+                    <option value={option.value}>{option.label}</option>
+                  {/each}
+                </select>
+              </span>
+            </label>
+
+            {#if dialogIsOracle}
+              <label class="field field-select grow">
+                <span class="field-label">数据源</span>
+                <span class="field-frame">
+                  <select value={dialogForm.exportMode} on:change={handleExportModeChange}>
+                    <option value="table">单表导出</option>
+                    <option value="schema">按 Schema 导出全部表</option>
+                  </select>
+                </span>
+              </label>
+            {:else}
+              <div class="dialog-spacer" aria-hidden="true"></div>
+            {/if}
+
+            {#if dialogIsMaxCompute}
+              <label class="field field-span-2">
+                <span class="field-label">Endpoint</span>
+                <span class="field-frame">
+                  <input
+                    value={dialogForm.maxcomputeEndpoint}
+                    on:input={(event) => handleConfigTextInput("maxcomputeEndpoint", event)}
+                    placeholder="https://service.cn-hangzhou.maxcompute.aliyun.com/api"
+                  />
+                </span>
+              </label>
+
+              <label class="field grow">
+                <span class="field-label">Access ID</span>
+                <span class="field-frame">
+                  <input
+                    value={dialogForm.maxcomputeAccessId}
+                    on:input={(event) => handleConfigTextInput("maxcomputeAccessId", event)}
+                  />
+                </span>
+              </label>
+
+              <label class="field grow field-password">
+                <span class="field-label">Access Key</span>
+                <span class="field-frame">
+                  <input
+                    value={dialogForm.maxcomputeAccessKey}
+                    on:input={(event) => handleConfigTextInput("maxcomputeAccessKey", event)}
+                    type={fieldInputType("maxcomputeAccessKey")}
+                  />
+                  <button
+                    type="button"
+                    class="field-visibility-toggle"
+                    aria-label={visibility.maxcomputeAccessKey ? "隐藏" : "显示"}
+                    aria-pressed={visibility.maxcomputeAccessKey}
+                    title={visibility.maxcomputeAccessKey ? "隐藏" : "显示"}
+                    on:click={() => toggleVisibility("maxcomputeAccessKey")}
+                  >
+                    <svg viewBox="0 0 20 20" aria-hidden="true">
+                      <path
+                        d="M2.4 10C3.86 6.95 6.66 5 10 5C13.34 5 16.14 6.95 17.6 10C16.14 13.05 13.34 15 10 15C6.66 15 3.86 13.05 2.4 10Z"
+                      />
+                      <circle cx="10" cy="10" r="2.4" />
+                      {#if !visibility.maxcomputeAccessKey}
+                        <path d="M4 4L16 16" />
+                      {/if}
+                    </svg>
+                  </button>
+                </span>
+              </label>
+
+              <label class="field">
+                <span class="field-label">Project</span>
+                <span class="field-frame">
+                  <input
+                    value={dialogForm.maxcomputeProject}
+                    on:input={(event) => handleConfigTextInput("maxcomputeProject", event)}
+                  />
+                </span>
+              </label>
+
+              <label class="field grow">
+                <span class="field-label">Table</span>
+                <span class="field-frame">
+                  <input value={dialogForm.table} on:input={handleTableInput} />
+                </span>
+              </label>
+
+              <label class="field grow">
+                <span class="field-label">Schema (optional)</span>
+                <span class="field-frame">
+                  <input
+                    value={dialogForm.schema}
+                    on:input={(event) => handleConfigTextInput("schema", event)}
+                  />
+                </span>
+              </label>
+
+              <label class="field grow">
+                <span class="field-label">Partition Spec (optional)</span>
+                <span class="field-frame">
+                  <input
+                    value={dialogForm.partitionSpec}
+                    on:input={(event) => handleConfigTextInput("partitionSpec", event)}
+                    placeholder="ds='2026-03-07', region='cn'"
+                  />
+                </span>
+              </label>
+            {:else}
+              <label class="field grow">
+                <span class="field-label">Host</span>
+                <span class="field-frame">
+                  <input value={dialogForm.host} on:input={(event) => handleConfigTextInput("host", event)} />
+                </span>
+              </label>
+
+              <label class="field grow">
+                <span class="field-label">Port</span>
+                <span class="field-frame">
+                  <input type="number" value={dialogForm.port} on:input={handlePortInput} />
+                </span>
+              </label>
+
+              <label class="field field-span-2">
+                <span class="field-label">Database / Service</span>
+                <span class="field-frame">
+                  <input
+                    value={dialogForm.database}
+                    on:input={(event) => handleConfigTextInput("database", event)}
+                  />
+                </span>
+              </label>
+
+              <label class="field grow">
+                <span class="field-label">Username</span>
+                <span class="field-frame">
+                  <input
+                    value={dialogForm.username}
+                    on:input={(event) => handleConfigTextInput("username", event)}
+                  />
+                </span>
+              </label>
+
+              <label class="field grow field-password">
+                <span class="field-label">Password</span>
+                <span class="field-frame">
+                  <input
+                    value={dialogForm.password}
+                    on:input={(event) => handleConfigTextInput("password", event)}
+                    type={fieldInputType("password")}
+                  />
+                  <button
+                    type="button"
+                    class="field-visibility-toggle"
+                    aria-label={visibility.password ? "隐藏" : "显示"}
+                    aria-pressed={visibility.password}
+                    title={visibility.password ? "隐藏" : "显示"}
+                    on:click={() => toggleVisibility("password")}
+                  >
+                    <svg viewBox="0 0 20 20" aria-hidden="true">
+                      <path
+                        d="M2.4 10C3.86 6.95 6.66 5 10 5C13.34 5 16.14 6.95 17.6 10C16.14 13.05 13.34 15 10 15C6.66 15 3.86 13.05 2.4 10Z"
+                      />
+                      <circle cx="10" cy="10" r="2.4" />
+                      {#if !visibility.password}
+                        <path d="M4 4L16 16" />
+                      {/if}
+                    </svg>
+                  </button>
+                </span>
+              </label>
+
+              <label class="field grow">
+                <span class="field-label"
+                  >{dialogIsOracleSchemaMode ? "Schema" : "Schema (optional)"}</span
+                >
+                <span class="field-frame">
+                  <input value={dialogForm.schema} on:input={handleSchemaInput} />
+                </span>
+              </label>
+
+              {#if !dialogIsOracleSchemaMode}
+                <label class="field grow">
+                  <span class="field-label">Table</span>
+                  <span class="field-frame">
+                    <input value={dialogForm.table} on:input={handleTableInput} />
+                  </span>
+                </label>
+              {:else}
+                <div class="dialog-spacer" aria-hidden="true"></div>
+              {/if}
+            {/if}
+          </div>
+
+          <div class="dialog-actions">
+            <button class="button button-ghost" on:click={closeConfigDialog}>取消</button>
+            <button class="button button-secondary" on:click={saveConfigAndTest}>
+              保存并测试
+            </button>
+            <button class="button button-primary" on:click={saveConfigDialog}>保存配置</button>
+          </div>
+        </div>
       </div>
     {/if}
 
@@ -1179,49 +1345,49 @@
   .workspace {
     max-width: 1480px;
     margin: 0 auto;
-    padding: 28px 28px 40px;
+    padding: 22px 24px 32px;
   }
 
   .topbar {
     display: flex;
     align-items: flex-end;
     justify-content: space-between;
-    gap: 24px;
-    margin-bottom: 18px;
+    gap: 20px;
+    margin-bottom: 12px;
   }
 
-  .eyebrow,
-  .surface-kicker {
+  .eyebrow {
     margin: 0;
     color: var(--accent-strong);
-    font-size: 11px;
+    font-size: 10.5px;
     font-weight: 800;
     line-height: 1.1;
-    letter-spacing: 0.18em;
+    letter-spacing: 0.16em;
     text-transform: uppercase;
   }
 
   .brand-block h1 {
-    margin: 8px 0 0;
-    font-size: clamp(34px, 4vw, 52px);
-    line-height: 0.95;
+    margin: 4px 0 0;
+    font-size: clamp(26px, 3vw, 38px);
+    line-height: 0.96;
     letter-spacing: -0.055em;
     font-weight: 800;
   }
 
   .subcopy {
-    max-width: 620px;
-    margin: 12px 0 0;
+    max-width: 360px;
+    margin: 8px 0 0;
     color: var(--muted);
-    font-size: 15px;
-    line-height: 1.55;
+    font-size: 13px;
+    line-height: 1.4;
   }
 
   .hero-actions {
     display: inline-flex;
-    gap: 12px;
+    gap: 10px;
     align-items: center;
     flex: 0 0 auto;
+    margin-bottom: 2px;
   }
 
   .hero-strip,
@@ -1238,9 +1404,9 @@
   .hero-strip {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
-    gap: 18px;
-    padding: 22px 24px;
-    margin-bottom: 18px;
+    gap: 14px;
+    padding: 20px 22px;
+    margin-bottom: 16px;
     background:
       linear-gradient(135deg, rgba(9, 18, 26, 0.95) 0%, rgba(18, 38, 47, 0.88) 70%),
       linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent);
@@ -1264,7 +1430,7 @@
     position: relative;
     z-index: 1;
     display: grid;
-    gap: 10px;
+    gap: 8px;
   }
 
   .status-header {
@@ -1295,16 +1461,16 @@
   }
 
   .status-title {
-    font-size: 20px;
+    font-size: 18px;
     font-weight: 800;
     letter-spacing: -0.02em;
   }
 
   .status-copy {
     margin: 0;
-    max-width: 580px;
+    max-width: 520px;
     color: rgba(238, 247, 245, 0.72);
-    line-height: 1.5;
+    line-height: 1.42;
   }
 
   .status-copy strong {
@@ -1333,13 +1499,13 @@
     z-index: 1;
     display: grid;
     grid-template-columns: repeat(3, minmax(88px, 1fr));
-    gap: 10px;
+    gap: 8px;
     margin: 0;
   }
 
   .hero-stats div {
     min-width: 0;
-    padding-left: 14px;
+    padding-left: 16px;
     border-left: 1px solid rgba(255, 255, 255, 0.12);
   }
 
@@ -1354,25 +1520,23 @@
     margin: 0;
     color: #fff;
     font-family: "SF Mono", "JetBrains Mono", "Menlo", monospace;
-    font-size: 28px;
+    font-size: 24px;
     font-weight: 700;
     letter-spacing: -0.04em;
   }
 
   .workbench {
-    display: grid;
-    grid-template-columns: minmax(320px, 392px) minmax(0, 1fr);
-    gap: 18px;
-    align-items: start;
+    display: block;
   }
 
   .workbench-main {
     display: grid;
-    gap: 18px;
+    gap: 14px;
   }
 
   .surface {
-    padding: 22px 22px 20px;
+    padding: 18px 18px 16px;
+    border-radius: 22px;
   }
 
   .surface::before {
@@ -1387,14 +1551,14 @@
   .surface-head {
     display: flex;
     justify-content: space-between;
-    gap: 16px;
+    gap: 14px;
     align-items: end;
-    margin-bottom: 18px;
+    margin-bottom: 12px;
   }
 
   .surface-head h2 {
-    margin: 8px 0 0;
-    font-size: 24px;
+    margin: 0;
+    font-size: 20px;
     line-height: 1;
     letter-spacing: -0.04em;
     font-weight: 800;
@@ -1402,17 +1566,73 @@
 
   .surface-note {
     margin: 0;
-    max-width: 220px;
+    max-width: 200px;
     color: var(--muted);
-    font-size: 13px;
+    font-size: 12.5px;
     line-height: 1.5;
     text-align: right;
+  }
+
+  .surface-form .surface-head {
+    align-items: flex-start;
+    min-height: 30px;
+    margin-bottom: 6px;
+  }
+
+  .surface-form .surface-note {
+    max-width: 162px;
+    padding-top: 1px;
+    line-height: 1.45;
+  }
+
+  .surface-form
+    > :is(label, .field-row, .parameter-grid, .inline-note-row, .mode-banner):not(.surface-head) {
+    margin-top: 9px;
+  }
+
+  .surface-form
+    > .surface-head
+    + :is(label, .field-row, .parameter-grid, .inline-note-row, .mode-banner) {
+    margin-top: 0;
+  }
+
+  .mode-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    border: 1px solid rgba(60, 139, 132, 0.16);
+    border-radius: 14px;
+    background: rgba(60, 139, 132, 0.06);
+  }
+
+  .mode-banner p {
+    margin: 0;
+    color: #45606a;
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  .mode-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: rgba(60, 139, 132, 0.12);
+    color: var(--accent-strong);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    white-space: nowrap;
   }
 
   .parameter-grid,
   .field-row {
     display: grid;
-    gap: 12px;
+    gap: 10px;
   }
 
   .parameter-grid {
@@ -1429,7 +1649,7 @@
 
   .field {
     display: grid;
-    gap: 6px;
+    gap: 4px;
     margin: 0;
   }
 
@@ -1439,19 +1659,21 @@
 
   .field-label {
     color: #5a6777;
-    font-size: 12px;
+    font-size: 11.5px;
     font-weight: 800;
-    line-height: 1.1;
+    line-height: 1.2;
     letter-spacing: 0.01em;
     padding-left: 2px;
+    min-height: 14px;
   }
 
   .field-frame {
     position: relative;
     display: block;
-    padding: 10px 12px 9px;
+    padding: 9px 12px 8px;
+    min-height: 46px;
     border: 1px solid var(--field-border);
-    border-radius: 14px;
+    border-radius: 13px;
     background: var(--field-bg);
     transition:
       border-color 0.16s ease,
@@ -1502,6 +1724,11 @@
     padding-right: 28px;
   }
 
+  .field-select select,
+  input {
+    line-height: 1.25;
+  }
+
   .field-visibility-toggle {
     position: absolute;
     right: 0;
@@ -1547,9 +1774,9 @@
   .inline-note-row {
     display: flex;
     justify-content: space-between;
-    gap: 16px;
+    gap: 14px;
     align-items: center;
-    margin-top: 12px;
+    margin-top: 10px;
   }
 
   .panel-note,
@@ -1577,10 +1804,12 @@
     overflow-wrap: anywhere;
   }
 
-  .result-grid {
+  .output-section {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
-    gap: 18px;
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 340px);
+    gap: 16px;
+    align-items: start;
+    margin-top: 12px;
   }
 
   .generated-toolbar,
@@ -1593,23 +1822,34 @@
   }
 
   .generated-toolbar {
-    padding-bottom: 12px;
+    padding-bottom: 10px;
     border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  }
+
+  .generated-toolbar-main {
+    display: inline-flex;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
   }
 
   .generated-list {
     display: grid;
-    gap: 8px;
-    margin-top: 14px;
+    gap: 6px;
+    margin-top: 10px;
   }
 
   .generated-list.is-empty {
-    min-height: 120px;
+    min-height: 132px;
+    padding: 16px 18px;
     align-content: center;
+    border: 1px dashed rgba(148, 163, 184, 0.24);
+    border-radius: 16px;
+    background: rgba(245, 248, 250, 0.62);
   }
 
   .generated-item {
-    padding: 12px 0;
+    padding: 10px 0;
     border-bottom: 1px solid rgba(148, 163, 184, 0.14);
     transition:
       transform 0.18s ease,
@@ -1713,21 +1953,38 @@
     font-family: "SF Mono", "JetBrains Mono", "Menlo", monospace;
   }
 
-  .surface-zip {
-    align-self: start;
+  .zip-inline {
+    display: grid;
+    align-content: start;
+    gap: 12px;
+    padding-left: 16px;
+    border-left: 1px solid rgba(148, 163, 184, 0.16);
+  }
+
+  .zip-inline-head h3 {
+    margin: 0;
+    font-size: 17px;
+    letter-spacing: -0.03em;
+  }
+
+  .zip-inline-head p {
+    margin: 4px 0 0;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.5;
   }
 
   .zip-toggle {
-    margin-top: 6px;
+    margin-top: 0;
   }
 
   .compact-field {
-    margin-top: 14px;
+    margin-top: 0;
   }
 
   .zip-actions {
     align-items: flex-end;
-    margin-top: 16px;
+    margin-top: 0;
   }
 
   .zip-note {
@@ -1736,7 +1993,7 @@
   }
 
   .surface-log {
-    padding-top: 16px;
+    padding-top: 14px;
   }
 
   .panel-toggle {
@@ -1759,7 +2016,7 @@
   }
 
   .panel-toggle-title {
-    font-size: 24px;
+    font-size: 20px;
     font-weight: 800;
     line-height: 1;
     letter-spacing: -0.04em;
@@ -1813,9 +2070,9 @@
   }
 
   textarea {
-    min-height: 240px;
+    min-height: 220px;
     resize: vertical;
-    padding: 14px 16px;
+    padding: 13px 14px;
     border: 1px solid var(--field-border);
     border-radius: 16px;
     background: rgba(247, 249, 251, 0.9);
@@ -1833,9 +2090,9 @@
   .button {
     border: none;
     border-radius: 12px;
-    padding: 12px 18px;
+    padding: 11px 18px;
     cursor: pointer;
-    font-size: 14px;
+    font-size: 13.5px;
     font-weight: 800;
     letter-spacing: -0.01em;
     transition:
@@ -1865,6 +2122,14 @@
     box-shadow: 0 12px 24px rgba(60, 139, 132, 0.24);
   }
 
+  .surface-files {
+    background: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.82) 0%,
+      rgba(252, 253, 253, 0.74) 100%
+    );
+  }
+
   .button-secondary {
     border: 1px solid rgba(19, 35, 63, 0.12);
     background: rgba(255, 255, 255, 0.78);
@@ -1874,6 +2139,12 @@
   .button-ghost {
     background: rgba(148, 163, 184, 0.14);
     color: var(--ink);
+  }
+
+  .button-inline {
+    padding: 8px 12px;
+    font-size: 12.5px;
+    font-weight: 700;
   }
 
   .notice-banner {
@@ -1927,6 +2198,7 @@
     align-items: center;
     justify-content: center;
     padding: 24px;
+    overflow: auto;
     background: rgba(15, 23, 42, 0.28);
     backdrop-filter: blur(10px);
   }
@@ -1940,6 +2212,14 @@
     box-shadow: 0 28px 60px rgba(15, 23, 42, 0.22);
   }
 
+  .dialog-card-wide {
+    width: min(820px, 100%);
+    max-height: min(820px, calc(100vh - 48px));
+    display: flex;
+    flex-direction: column;
+    padding: 22px 22px 20px;
+  }
+
   .dialog-card h3 {
     margin: 0 0 10px;
     font-size: 22px;
@@ -1947,10 +2227,41 @@
     letter-spacing: -0.03em;
   }
 
+  .dialog-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: end;
+    margin-bottom: 16px;
+  }
+
   .dialog-copy {
     margin: 0;
     color: var(--muted);
     line-height: 1.55;
+  }
+
+  .dialog-form {
+    display: grid;
+    gap: 10px;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    padding: 16px;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 18px;
+    background:
+      linear-gradient(180deg, rgba(248, 251, 252, 0.96), rgba(255, 255, 255, 0.9)),
+      rgba(255, 255, 255, 0.76);
+  }
+
+  .dialog-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+
+  .dialog-spacer {
+    min-height: 0;
   }
 
   .dialog-paths {
@@ -1983,6 +2294,7 @@
 
   .dialog-actions {
     display: flex;
+    flex: 0 0 auto;
     justify-content: flex-end;
     gap: 10px;
     margin-top: 18px;
@@ -2007,12 +2319,8 @@
     animation-delay: 0.1s;
   }
 
-  .is-entering .surface-zip {
-    animation-delay: 0.15s;
-  }
-
   .is-entering .surface-log {
-    animation-delay: 0.2s;
+    animation-delay: 0.15s;
   }
 
   .is-entering .generated-item {
@@ -2079,8 +2387,6 @@
   }
 
   @media (max-width: 1220px) {
-    .workbench,
-    .result-grid,
     .hero-strip {
       grid-template-columns: 1fr;
     }
@@ -2092,6 +2398,18 @@
     .surface-note {
       max-width: none;
       text-align: left;
+    }
+
+    .output-section {
+      grid-template-columns: 1fr;
+      gap: 18px;
+    }
+
+    .zip-inline {
+      padding-left: 0;
+      padding-top: 18px;
+      border-left: none;
+      border-top: 1px solid rgba(148, 163, 184, 0.16);
     }
   }
 
@@ -2105,22 +2423,37 @@
     .inline-note-row,
     .zip-actions,
     .generated-item,
-    .dialog-actions {
+    .dialog-actions,
+    .dialog-head {
       display: grid;
+    }
+
+    .generated-toolbar {
+      gap: 10px;
+    }
+
+    .generated-toolbar-main {
+      justify-content: space-between;
     }
 
     .hero-actions {
       width: 100%;
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: 1fr;
     }
 
     .parameter-grid,
     .field-row,
-    .hero-stats {
+    .hero-stats,
+    .dialog-form-grid {
       grid-template-columns: 1fr;
     }
 
+    .dialog-spacer {
+      display: none;
+    }
+
+    .mode-banner,
     .output-preview,
     .zip-note {
       max-width: none;
@@ -2137,6 +2470,12 @@
       bottom: 16px;
       transform: none;
       min-width: 0;
+    }
+
+    .dialog-card-wide {
+      width: min(100%, 820px);
+      max-height: calc(100vh - 24px);
+      padding: 18px;
     }
   }
 </style>

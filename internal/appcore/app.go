@@ -193,6 +193,13 @@ func (a *App) GetGeneratedFiles() []GeneratedFile {
 	return files
 }
 
+func (a *App) ClearGeneratedFiles() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.generatedFiles = nil
+}
+
 func (a *App) CreateZipArchive(request ZipRequest) (ZipResult, error) {
 	files, err := a.validateZipRequest(request)
 	if err != nil {

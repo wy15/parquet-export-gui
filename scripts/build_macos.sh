@@ -4,4 +4,4 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 cd "$ROOT_DIR"
-wails build --clean --platform darwin/universal -o "Parquet Export Studio"
+wails build --clean --platform darwin/arm64 -o "Parquet Export Studio"
