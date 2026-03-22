@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { afterUpdate, onMount } from "svelte";
+  import { afterUpdate, onMount, tick } from "svelte";
   import { EventsOn } from "../wailsjs/runtime/runtime";
   import type { appcore } from "../wailsjs/go/models";
   import {
@@ -98,6 +98,8 @@
   let entering = true;
   let fatalError = "";
   let logView: HTMLTextAreaElement | null = null;
+  let configDialogCard: HTMLDivElement | null = null;
+  let lastFocusedElement: HTMLElement | null = null;
   let noticeTimer: number | null = null;
   let lastRenderedLogCount = 0;
   let stickLogToBottom = true;
@@ -330,7 +332,38 @@
     return visibility[key] ? "text" : "password";
   }
 
+  function getDialogFocusableElements() {
+    if (!configDialogCard) {
+      return [];
+    }
+
+    return Array.from(
+      configDialogCard.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter((element) => !element.hasAttribute("inert") && element.ariaHidden !== "true");
+  }
+
+  async function focusConfigDialog() {
+    await tick();
+    const [firstFocusable] = getDialogFocusableElements();
+    (firstFocusable ?? configDialogCard)?.focus();
+  }
+
+  function blockWhileConfigDialogOpen() {
+    if (!configDialogOpen) {
+      return false;
+    }
+
+    showNotice("请先保存或取消当前数据源配置。", "error");
+    return true;
+  }
+
   async function startTask(kind: string) {
+    if (blockWhileConfigDialogOpen()) {
+      return;
+    }
+
     try {
       await StartTask(kind, sanitizeRequest());
     } catch (error) {
@@ -342,6 +375,10 @@
   }
 
   async function startExportTask() {
+    if (blockWhileConfigDialogOpen()) {
+      return;
+    }
+
     const request = sanitizeRequest();
 
     try {
@@ -568,13 +605,18 @@
   }
 
   function openConfigDialog() {
+    lastFocusedElement =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     configDraft = { ...form };
     configDialogOpen = true;
+    void focusConfigDialog();
   }
 
   function closeConfigDialog() {
     configDialogOpen = false;
     configDraft = null;
+    lastFocusedElement?.focus();
+    lastFocusedElement = null;
   }
 
   function onConfigBackdropClick(event: MouseEvent) {
@@ -591,6 +633,42 @@
     if (event.key === "Enter" || event.key === " " || event.key === "Escape") {
       event.preventDefault();
       closeConfigDialog();
+    }
+  }
+
+  function onConfigDialogKeydown(event: KeyboardEvent) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeConfigDialog();
+      return;
+    }
+
+    if (event.key !== "Tab") {
+      return;
+    }
+
+    const focusableElements = getDialogFocusableElements();
+    if (focusableElements.length === 0) {
+      event.preventDefault();
+      configDialogCard?.focus();
+      return;
+    }
+
+    const activeElement = document.activeElement;
+    const firstFocusable = focusableElements[0];
+    const lastFocusable = focusableElements[focusableElements.length - 1];
+
+    if (event.shiftKey) {
+      if (activeElement === firstFocusable || activeElement === configDialogCard) {
+        event.preventDefault();
+        lastFocusable.focus();
+      }
+      return;
+    }
+
+    if (activeElement === lastFocusable) {
+      event.preventDefault();
+      firstFocusable.focus();
     }
   }
 
@@ -725,308 +803,319 @@
   <pre class="fatal-error">{fatalError}</pre>
 {:else}
   <div class:workspace={true} class:is-entering={entering}>
-    <header class="topbar">
-      <div class="brand-block">
-        <p class="eyebrow">Parquet Export Studio</p>
-        <h1>导出工作台</h1>
-        <p class="subcopy">将数据库表导出为 Parquet 文件。</p>
-      </div>
-
-      <div class="hero-actions">
-        <button class="button button-secondary" disabled={running} on:click={openConfigDialog}>
-          配置数据源
-        </button>
-        <button
-          class="button button-secondary"
-          disabled={running}
-          on:click={() => startTask("test")}
-        >
-          测试连接
-        </button>
-        <button class="button button-primary" disabled={running} on:click={startExportTask}>
-          <span class="button-icon">▶</span>开始导出
-        </button>
-      </div>
-    </header>
-
-    <section class="hero-strip">
-      <div class="hero-status-panel">
-        <div class="status-header">
-          <span class={`status-dot status-${statusTone}`}></span>
-          <span class="status-title">{status}</span>
+    <div inert={configDialogOpen} aria-hidden={configDialogOpen}>
+      <header class="topbar">
+        <div class="brand-block">
+          <p class="eyebrow">Parquet Export Studio</p>
+          <h1>导出工作台</h1>
+          <p class="subcopy">将数据库表导出为 Parquet 文件。</p>
         </div>
-        <p class="status-copy">
-          当前数据源 <strong>{backendLabel}</strong>
-          {#if connectionSummary}
-            ，连接信息 <strong>{connectionSummary}</strong>
-          {/if}
-          {#if isOracleSchemaMode && form.schema}
-            ，目标 Schema <strong>{form.schema}</strong>
-          {:else if form.table}
-            ，目标表 <strong>{form.table}</strong>
-          {/if}
-        </p>
-        {#if running}
-          <div class="status-progress" aria-hidden="true">
-            <div class="status-progress-bar"></div>
+
+        <div class="hero-actions">
+          <button
+            class="button button-secondary"
+            disabled={running || configDialogOpen}
+            on:click={openConfigDialog}
+          >
+            配置数据源
+          </button>
+          <button
+            class="button button-secondary"
+            disabled={running || configDialogOpen}
+            on:click={() => startTask("test")}
+          >
+            测试连接
+          </button>
+          <button
+            class="button button-primary"
+            disabled={running || configDialogOpen}
+            on:click={startExportTask}
+          >
+            <span class="button-icon">▶</span>开始导出
+          </button>
+        </div>
+      </header>
+
+      <section class="hero-strip">
+        <div class="hero-status-panel">
+          <div class="status-header">
+            <span class={`status-dot status-${statusTone}`}></span>
+            <span class="status-title">{status}</span>
           </div>
-        {/if}
-      </div>
-
-      <dl class="hero-stats">
-        <div>
-          <dt>已写入</dt>
-          <dd>{numberWithCommas(rowsWritten)}</dd>
-        </div>
-        <div>
-          <dt>生成文件</dt>
-          <dd>{generatedFiles.length}</dd>
-        </div>
-        <div>
-          <dt>日志条数</dt>
-          <dd>{logs.length}</dd>
-        </div>
-      </dl>
-    </section>
-
-    <main class="workbench">
-      <div class="workbench-main">
-        <section class="surface surface-export surface-form">
-          <div class="surface-head">
-            <div>
-              <h2>导出参数</h2>
-            </div>
-            <p class="surface-note">设置输出路径、批次大小和压缩方式。</p>
-          </div>
-
-          {#if isOracleSchemaMode}
-            <div class="mode-banner">
-              <span class="mode-badge">Schema 模式</span>
-              <p>当前将按 Schema 批量导出到目标目录。</p>
+          <p class="status-copy">
+            当前数据源 <strong>{backendLabel}</strong>
+            {#if connectionSummary}
+              ，连接信息 <strong>{connectionSummary}</strong>
+            {/if}
+            {#if isOracleSchemaMode && form.schema}
+              ，目标 Schema <strong>{form.schema}</strong>
+            {:else if form.table}
+              ，目标表 <strong>{form.table}</strong>
+            {/if}
+          </p>
+          {#if running}
+            <div class="status-progress" aria-hidden="true">
+              <div class="status-progress-bar"></div>
             </div>
           {/if}
+        </div>
 
-          <div class="parameter-grid">
-            <label class="field field-span-2">
-              <span class="field-label"
-                >{isOracleSchemaMode ? "输出目录" : "输出 Parquet 路径"}</span
-              >
-              <span class="field-frame">
-                <input bind:value={form.outputPath} />
-              </span>
-            </label>
-
-            <label class="field grow">
-              <span class="field-label">批次大小</span>
-              <span class="field-frame">
-                <input
-                  min="1"
-                  step="1000"
-                  type="number"
-                  value={form.batchSize}
-                  on:input={handleBatchSizeInput}
-                />
-              </span>
-            </label>
-
-            <label class="field field-select grow">
-              <span class="field-label">压缩</span>
-              <span class="field-frame">
-                <select bind:value={form.compression}>
-                  {#each compressions as option (option)}
-                    <option value={option}>{option}</option>
-                  {/each}
-                </select>
-              </span>
-            </label>
+        <dl class="hero-stats">
+          <div>
+            <dt>已写入</dt>
+            <dd>{numberWithCommas(rowsWritten)}</dd>
           </div>
-
-          <div class="inline-note-row">
-            <p class="panel-note">
-              {#if isOracleSchemaMode}
-                将在输出目录下为 schema 内每张表生成一个独立的 parquet 文件。
-              {:else}
-                批次越大速度越快，批次越小内存占用越低。
-              {/if}
-            </p>
-            <p class="output-preview">{form.outputPath || "请设置输出路径"}</p>
+          <div>
+            <dt>生成文件</dt>
+            <dd>{generatedFiles.length}</dd>
           </div>
-        </section>
+          <div>
+            <dt>日志条数</dt>
+            <dd>{logs.length}</dd>
+          </div>
+        </dl>
+      </section>
 
-        <section class="surface surface-files">
-          <div class="surface-head">
-            <div>
-              <h2>本次生成的 Parquet</h2>
+      <main class="workbench">
+        <div class="workbench-main">
+          <section class="surface surface-export surface-form">
+            <div class="surface-head">
+              <div>
+                <h2>导出参数</h2>
+              </div>
+              <p class="surface-note">设置输出路径、批次大小和压缩方式。</p>
             </div>
-            <p class="surface-note">查看本次会话生成的文件，并继续打包。</p>
-          </div>
 
-          <div class="generated-toolbar">
-            <div class="generated-toolbar-main">
-              <label class="list-checkbox master-checkbox">
-                <input
-                  type="checkbox"
-                  checked={allSelected}
-                  disabled={generatedFiles.length === 0}
-                  aria-label="全选文件"
-                  on:change={handleSelectAllChange}
-                />
-                <span>全选文件</span>
+            {#if isOracleSchemaMode}
+              <div class="mode-banner">
+                <span class="mode-badge">Schema 模式</span>
+                <p>当前将按 Schema 批量导出到目标目录。</p>
+              </div>
+            {/if}
+
+            <div class="parameter-grid">
+              <label class="field field-span-2">
+                <span class="field-label"
+                  >{isOracleSchemaMode ? "输出目录" : "输出 Parquet 路径"}</span
+                >
+                <span class="field-frame">
+                  <input bind:value={form.outputPath} />
+                </span>
               </label>
-              <span class="generated-meta">已选 {selectedCount} / {generatedFiles.length}</span>
-            </div>
-            <button
-              class="button button-ghost button-inline"
-              disabled={generatedFiles.length === 0 || running}
-              on:click={clearGeneratedFilesList}
-            >
-              清空列表
-            </button>
-          </div>
 
-          <div class="output-section">
-            <div class="generated-list" class:is-empty={generatedFiles.length === 0}>
-              {#if generatedFiles.length === 0}
-                <p class="empty-copy">当前会话还没有导出文件。</p>
-              {:else}
-                {#each generatedFiles as file (file.path)}
-                  <label
-                    class="generated-item"
-                    class:is-selected={selectedFiles.includes(file.path)}
-                  >
-                    <span class="list-checkbox">
-                      <input
-                        class="generated-file-checkbox"
-                        type="checkbox"
-                        checked={selectedFiles.includes(file.path)}
-                        on:change={(event) => handleFileSelection(file.path, event)}
-                      />
-                      <span class="generated-file-copy">
-                        <strong>{file.name}</strong>
+              <label class="field grow">
+                <span class="field-label">批次大小</span>
+                <span class="field-frame">
+                  <input
+                    min="1"
+                    step="1000"
+                    type="number"
+                    value={form.batchSize}
+                    on:input={handleBatchSizeInput}
+                  />
+                </span>
+              </label>
+
+              <label class="field field-select grow">
+                <span class="field-label">压缩</span>
+                <span class="field-frame">
+                  <select bind:value={form.compression}>
+                    {#each compressions as option (option)}
+                      <option value={option}>{option}</option>
+                    {/each}
+                  </select>
+                </span>
+              </label>
+            </div>
+
+            <div class="inline-note-row">
+              <p class="panel-note">
+                {#if isOracleSchemaMode}
+                  将在输出目录下为 schema 内每张表生成一个独立的 parquet 文件。
+                {:else}
+                  批次越大速度越快，批次越小内存占用越低。
+                {/if}
+              </p>
+              <p class="output-preview">{form.outputPath || "请设置输出路径"}</p>
+            </div>
+          </section>
+
+          <section class="surface surface-files">
+            <div class="surface-head">
+              <div>
+                <h2>本次生成的 Parquet</h2>
+              </div>
+              <p class="surface-note">查看本次会话生成的文件，并继续打包。</p>
+            </div>
+
+            <div class="generated-toolbar">
+              <div class="generated-toolbar-main">
+                <label class="list-checkbox master-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    disabled={generatedFiles.length === 0}
+                    aria-label="全选文件"
+                    on:change={handleSelectAllChange}
+                  />
+                  <span>全选文件</span>
+                </label>
+                <span class="generated-meta">已选 {selectedCount} / {generatedFiles.length}</span>
+              </div>
+              <button
+                class="button button-ghost button-inline"
+                disabled={generatedFiles.length === 0 || running}
+                on:click={clearGeneratedFilesList}
+              >
+                清空列表
+              </button>
+            </div>
+
+            <div class="output-section">
+              <div class="generated-list" class:is-empty={generatedFiles.length === 0}>
+                {#if generatedFiles.length === 0}
+                  <p class="empty-copy">当前会话还没有导出文件。</p>
+                {:else}
+                  {#each generatedFiles as file (file.path)}
+                    <label
+                      class="generated-item"
+                      class:is-selected={selectedFiles.includes(file.path)}
+                    >
+                      <span class="list-checkbox">
+                        <input
+                          class="generated-file-checkbox"
+                          type="checkbox"
+                          checked={selectedFiles.includes(file.path)}
+                          on:change={(event) => handleFileSelection(file.path, event)}
+                        />
+                        <span class="generated-file-copy">
+                          <strong>{file.name}</strong>
+                        </span>
                       </span>
-                    </span>
-                    <span class="generated-file-meta">{formatFileSize(file.size)}</span>
-                  </label>
-                {/each}
-              {/if}
-            </div>
+                      <span class="generated-file-meta">{formatFileSize(file.size)}</span>
+                    </label>
+                  {/each}
+                {/if}
+              </div>
 
-            <div class="zip-inline">
-              <div class="zip-inline-head">
-                <div>
-                  <h3>ZIP 打包</h3>
-                  <p>将选中文件打包为 ZIP。</p>
+              <div class="zip-inline">
+                <div class="zip-inline-head">
+                  <div>
+                    <h3>ZIP 打包</h3>
+                    <p>将选中文件打包为 ZIP。</p>
+                  </div>
+                </div>
+
+                <label class="list-checkbox zip-toggle">
+                  <input
+                    type="checkbox"
+                    checked={zipEnabled}
+                    disabled={generatedFiles.length === 0}
+                    on:change={handleZipEnabledChange}
+                  />
+                  <span>启用 ZIP 压缩</span>
+                </label>
+
+                {#if zipEnabled}
+                  <label class="field field-password compact-field">
+                    <span class="field-label">加密密码（可选）</span>
+                    <span class="field-frame">
+                      <input
+                        bind:value={zipPassword}
+                        type={fieldInputType("zipPassword")}
+                        placeholder="留空则生成不加密 ZIP"
+                      />
+                      <button
+                        type="button"
+                        class="field-visibility-toggle"
+                        aria-label={visibility.zipPassword ? "隐藏" : "显示"}
+                        aria-pressed={visibility.zipPassword}
+                        title={visibility.zipPassword ? "隐藏" : "显示"}
+                        on:click={() => toggleVisibility("zipPassword")}
+                      >
+                        <svg viewBox="0 0 20 20" aria-hidden="true">
+                          <path
+                            d="M2.4 10C3.86 6.95 6.66 5 10 5C13.34 5 16.14 6.95 17.6 10C16.14 13.05 13.34 15 10 15C6.66 15 3.86 13.05 2.4 10Z"
+                          />
+                          <circle cx="10" cy="10" r="2.4" />
+                          {#if !visibility.zipPassword}
+                            <path d="M4 4L16 16" />
+                          {/if}
+                        </svg>
+                      </button>
+                    </span>
+                  </label>
+                {/if}
+
+                <div class="zip-actions">
+                  <button
+                    class="button button-secondary"
+                    disabled={!zipEnabled || selectedCount === 0 || zipBusy}
+                    on:click={createZipArchiveFromSelection}
+                  >
+                    {zipBusy ? "正在打包…" : "创建 ZIP"}
+                  </button>
+                  <p class="zip-note">ZIP 将保存到首个选中文件所在目录。</p>
                 </div>
               </div>
-
-              <label class="list-checkbox zip-toggle">
-                <input
-                  type="checkbox"
-                  checked={zipEnabled}
-                  disabled={generatedFiles.length === 0}
-                  on:change={handleZipEnabledChange}
-                />
-                <span>启用 ZIP 压缩</span>
-              </label>
-
-              {#if zipEnabled}
-                <label class="field field-password compact-field">
-                  <span class="field-label">加密密码（可选）</span>
-                  <span class="field-frame">
-                    <input
-                      bind:value={zipPassword}
-                      type={fieldInputType("zipPassword")}
-                      placeholder="留空则生成不加密 ZIP"
-                    />
-                    <button
-                      type="button"
-                      class="field-visibility-toggle"
-                      aria-label={visibility.zipPassword ? "隐藏" : "显示"}
-                      aria-pressed={visibility.zipPassword}
-                      title={visibility.zipPassword ? "隐藏" : "显示"}
-                      on:click={() => toggleVisibility("zipPassword")}
-                    >
-                      <svg viewBox="0 0 20 20" aria-hidden="true">
-                        <path
-                          d="M2.4 10C3.86 6.95 6.66 5 10 5C13.34 5 16.14 6.95 17.6 10C16.14 13.05 13.34 15 10 15C6.66 15 3.86 13.05 2.4 10Z"
-                        />
-                        <circle cx="10" cy="10" r="2.4" />
-                        {#if !visibility.zipPassword}
-                          <path d="M4 4L16 16" />
-                        {/if}
-                      </svg>
-                    </button>
-                  </span>
-                </label>
-              {/if}
-
-              <div class="zip-actions">
-                <button
-                  class="button button-secondary"
-                  disabled={!zipEnabled || selectedCount === 0 || zipBusy}
-                  on:click={createZipArchiveFromSelection}
-                >
-                  {zipBusy ? "正在打包…" : "创建 ZIP"}
-                </button>
-                <p class="zip-note">ZIP 将保存到首个选中文件所在目录。</p>
-              </div>
             </div>
-          </div>
-        </section>
+          </section>
 
-        <section class="surface surface-log">
-          <button
-            type="button"
-            class="panel-toggle"
-            aria-expanded={logsExpanded}
-            on:click={() => (logsExpanded = !logsExpanded)}
+          <section class="surface surface-log">
+            <button
+              type="button"
+              class="panel-toggle"
+              aria-expanded={logsExpanded}
+              on:click={() => (logsExpanded = !logsExpanded)}
+            >
+              <span class="panel-toggle-copy">
+                <span class="panel-toggle-title">运行日志</span>
+              </span>
+              <span class="panel-toggle-meta">
+                <span class="log-badge">{logs.length}</span>
+                <span class="panel-toggle-state">{logsExpanded ? "收起" : "展开"}</span>
+                <svg
+                  class="panel-chevron"
+                  class:is-open={logsExpanded}
+                  width="14"
+                  height="14"
+                  viewBox="0 0 14 14"
+                  fill="none"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M3.5 5.25L7 8.75L10.5 5.25"
+                    stroke="currentColor"
+                    stroke-width="1.6"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </span>
+            </button>
+
+            <div class="log-collapse" class:is-open={logsExpanded}>
+              <textarea
+                bind:this={logView}
+                readonly
+                placeholder="日志会显示在这里"
+                aria-label="运行日志"
+                on:scroll={handleLogScroll}
+                value={logs.join("\n")}
+              ></textarea>
+            </div>
+          </section>
+        </div>
+      </main>
+
+      {#if notice}
+        <div class={`notice-banner notice-${notice.tone}`} role="status" aria-live="polite">
+          <span class="notice-icon" aria-hidden="true">{notice.tone === "success" ? "✓" : "⚠"}</span
           >
-            <span class="panel-toggle-copy">
-              <span class="panel-toggle-title">运行日志</span>
-            </span>
-            <span class="panel-toggle-meta">
-              <span class="log-badge">{logs.length}</span>
-              <span class="panel-toggle-state">{logsExpanded ? "收起" : "展开"}</span>
-              <svg
-                class="panel-chevron"
-                class:is-open={logsExpanded}
-                width="14"
-                height="14"
-                viewBox="0 0 14 14"
-                fill="none"
-                aria-hidden="true"
-              >
-                <path
-                  d="M3.5 5.25L7 8.75L10.5 5.25"
-                  stroke="currentColor"
-                  stroke-width="1.6"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              </svg>
-            </span>
-          </button>
-
-          <div class="log-collapse" class:is-open={logsExpanded}>
-            <textarea
-              bind:this={logView}
-              readonly
-              placeholder="日志会显示在这里"
-              aria-label="运行日志"
-              on:scroll={handleLogScroll}
-              value={logs.join("\n")}
-            ></textarea>
-          </div>
-        </section>
-      </div>
-    </main>
-
-    {#if notice}
-      <div class={`notice-banner notice-${notice.tone}`} role="status" aria-live="polite">
-        <span class="notice-icon" aria-hidden="true">{notice.tone === "success" ? "✓" : "⚠"}</span>
-        <span class="notice-message">{notice.message}</span>
-      </div>
-    {/if}
+          <span class="notice-message">{notice.message}</span>
+        </div>
+      {/if}
+    </div>
 
     {#if configDialogOpen}
       <div
@@ -1038,10 +1127,13 @@
         on:keydown={onConfigBackdropKeydown}
       >
         <div
+          bind:this={configDialogCard}
           class="dialog-card dialog-card-wide"
           role="dialog"
           aria-modal="true"
           aria-labelledby="configDialogTitle"
+          tabindex="-1"
+          on:keydown={onConfigDialogKeydown}
         >
           <div class="dialog-head">
             <div>
