@@ -467,6 +467,10 @@
   }
 
   async function clearGeneratedFilesList() {
+    if (running) {
+      return;
+    }
+
     await ClearGeneratedFiles();
     generatedFiles = [];
     selectedFiles = [];
@@ -873,7 +877,7 @@
             </div>
             <button
               class="button button-ghost button-inline"
-              disabled={generatedFiles.length === 0}
+              disabled={generatedFiles.length === 0 || running}
               on:click={clearGeneratedFilesList}
             >
               清空列表
