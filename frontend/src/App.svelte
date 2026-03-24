@@ -504,7 +504,7 @@
   }
 
   async function clearGeneratedFilesList() {
-    if (running) {
+    if (running || zipBusy) {
       return;
     }
 
@@ -964,7 +964,7 @@
               </div>
               <button
                 class="button button-ghost button-inline"
-                disabled={generatedFiles.length === 0 || running}
+                disabled={generatedFiles.length === 0 || running || zipBusy}
                 on:click={clearGeneratedFilesList}
               >
                 清空列表

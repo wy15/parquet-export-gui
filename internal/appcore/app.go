@@ -12,6 +12,7 @@ import (
 type App struct {
 	mu             sync.Mutex
 	running        bool
+	zipBusy        bool
 	generatedFiles []GeneratedFile
 	emitFunc       func(TaskEvent)
 }
@@ -197,10 +198,28 @@ func (a *App) ClearGeneratedFiles() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	if a.zipBusy {
+		return
+	}
+
 	a.generatedFiles = nil
 }
 
 func (a *App) CreateZipArchive(request ZipRequest) (ZipResult, error) {
+	a.mu.Lock()
+	if a.zipBusy {
+		a.mu.Unlock()
+		return ZipResult{}, errors.New("ZIP 打包正在进行中")
+	}
+	a.zipBusy = true
+	a.mu.Unlock()
+
+	defer func() {
+		a.mu.Lock()
+		a.zipBusy = false
+		a.mu.Unlock()
+	}()
+
 	files, err := a.validateZipRequest(request)
 	if err != nil {
 		return ZipResult{}, err
