@@ -4,6 +4,8 @@ import {appcore} from '../models';
 
 export function CheckExportOutput(arg1:string):Promise<appcore.ExportOutputCheck>;
 
+export function ClearGeneratedFiles():Promise<void>;
+
 export function CreateZipArchive(arg1:appcore.ZipRequest):Promise<appcore.ZipResult>;
 
 export function GetConfig():Promise<appcore.AppConfig>;

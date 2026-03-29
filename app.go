@@ -32,6 +32,10 @@ func (a *App) GetGeneratedFiles() []GeneratedFile {
 	return a.core.GetGeneratedFiles()
 }
 
+func (a *App) ClearGeneratedFiles() {
+	a.core.ClearGeneratedFiles()
+}
+
 func (a *App) CreateZipArchive(request ZipRequest) (ZipResult, error) {
 	return a.core.CreateZipArchive(request)
 }

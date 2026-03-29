@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { afterUpdate, onMount } from "svelte";
+  import { afterUpdate, onMount, tick } from "svelte";
   import { EventsOn } from "../wailsjs/runtime/runtime";
   import type { appcore } from "../wailsjs/go/models";
   import {
     CheckExportOutput,
+    ClearGeneratedFiles,
     CreateZipArchive,
     GetConfig,
     GetGeneratedFiles,
@@ -67,6 +68,8 @@
   let logsExpanded = false;
   let zipEnabled = false;
   let zipPassword = "";
+  let configDialogOpen = false;
+  let configDraft: ExportRequest | null = null;
   let visibility: VisibilityState = {
     password: false,
     maxcomputeAccessKey: false,
@@ -95,6 +98,8 @@
   let entering = true;
   let fatalError = "";
   let logView: HTMLTextAreaElement | null = null;
+  let configDialogCard: HTMLDivElement | null = null;
+  let lastFocusedElement: HTMLElement | null = null;
   let noticeTimer: number | null = null;
   let lastRenderedLogCount = 0;
   let stickLogToBottom = true;
@@ -102,8 +107,23 @@
   $: isOracle = form.backend === "oracle";
   $: isMaxCompute = form.backend === "maxcompute";
   $: isOracleSchemaMode = isOracle && form.exportMode === "schema";
+  $: dialogForm = configDraft ?? form;
+  $: dialogIsOracle = dialogForm.backend === "oracle";
+  $: dialogIsMaxCompute = dialogForm.backend === "maxcompute";
+  $: dialogIsOracleSchemaMode = dialogIsOracle && dialogForm.exportMode === "schema";
   $: allSelected = generatedFiles.length > 0 && selectedFiles.length === generatedFiles.length;
   $: selectedCount = selectedFiles.length;
+  $: backendLabel = backends.find((option) => option.value === form.backend)?.label ?? form.backend;
+  $: connectionSummary = isMaxCompute
+    ? [form.maxcomputeProject, form.maxcomputeEndpoint].filter(Boolean).join(" · ")
+    : [form.host, form.database].filter(Boolean).join(" · ");
+  $: statusTone = running
+    ? "running"
+    : status.includes("失败")
+      ? "error"
+      : status === "导出完成" || status === "连接成功"
+        ? "success"
+        : "idle";
 
   afterUpdate(() => {
     if (!logView) {
@@ -212,10 +232,25 @@
     };
   }
 
+  function updateConfigDraft(patch: Partial<ExportRequest>) {
+    if (!configDraft) {
+      return;
+    }
+
+    configDraft = {
+      ...configDraft,
+      ...patch,
+    };
+  }
+
   function handleBackendChange(event: Event) {
+    if (!configDraft) {
+      return;
+    }
+
     const backend = (event.currentTarget as HTMLSelectElement).value;
-    const exportMode = backend === "oracle" ? form.exportMode || "table" : "table";
-    updateForm({
+    const exportMode = backend === "oracle" ? configDraft.exportMode || "table" : "table";
+    updateConfigDraft({
       backend,
       exportMode,
       port: defaultPorts[backend] ?? 0,
@@ -223,44 +258,62 @@
   }
 
   function handleExportModeChange(event: Event) {
+    if (!configDraft) {
+      return;
+    }
+
     const exportMode = (event.currentTarget as HTMLSelectElement).value;
     if (exportMode === "schema") {
-      updateForm({
+      updateConfigDraft({
         exportMode,
-        outputPath: replaceOutputDirectory(form.outputPath, form.schema),
+        outputPath: replaceOutputDirectory(configDraft.outputPath, configDraft.schema),
       });
       return;
     }
 
-    updateForm({
+    updateConfigDraft({
       exportMode,
-      outputPath: replaceOutputFilename(form.outputPath, form.table),
+      outputPath: replaceOutputFilename(configDraft.outputPath, configDraft.table),
     });
   }
 
   function handleTableInput(event: Event) {
+    if (!configDraft) {
+      return;
+    }
+
     const table = (event.currentTarget as HTMLInputElement).value;
-    updateForm({
+    updateConfigDraft({
       table,
-      outputPath: isOracleSchemaMode
-        ? form.outputPath
-        : replaceOutputFilename(form.outputPath, table),
+      outputPath: dialogIsOracleSchemaMode
+        ? configDraft.outputPath
+        : replaceOutputFilename(configDraft.outputPath, table),
     });
   }
 
   function handleSchemaInput(event: Event) {
+    if (!configDraft) {
+      return;
+    }
+
     const schema = (event.currentTarget as HTMLInputElement).value;
-    updateForm({
+    updateConfigDraft({
       schema,
-      outputPath: isOracleSchemaMode
-        ? replaceOutputDirectory(form.outputPath, schema)
-        : form.outputPath,
+      outputPath: dialogIsOracleSchemaMode
+        ? replaceOutputDirectory(configDraft.outputPath, schema)
+        : configDraft.outputPath,
     });
   }
 
   function handlePortInput(event: Event) {
     const value = Number((event.currentTarget as HTMLInputElement).value);
-    updateForm({ port: Number.isFinite(value) ? value : 0 });
+    updateConfigDraft({ port: Number.isFinite(value) ? value : 0 });
+  }
+
+  function handleConfigTextInput(field: keyof ExportRequest, event: Event) {
+    updateConfigDraft({
+      [field]: (event.currentTarget as HTMLInputElement).value,
+    } as Partial<ExportRequest>);
   }
 
   function handleBatchSizeInput(event: Event) {
@@ -279,7 +332,38 @@
     return visibility[key] ? "text" : "password";
   }
 
+  function getDialogFocusableElements() {
+    if (!configDialogCard) {
+      return [];
+    }
+
+    return Array.from(
+      configDialogCard.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter((element) => !element.hasAttribute("inert") && element.ariaHidden !== "true");
+  }
+
+  async function focusConfigDialog() {
+    await tick();
+    const [firstFocusable] = getDialogFocusableElements();
+    (firstFocusable ?? configDialogCard)?.focus();
+  }
+
+  function blockWhileConfigDialogOpen() {
+    if (!configDialogOpen) {
+      return false;
+    }
+
+    showNotice("请先保存或取消当前数据源配置。", "error");
+    return true;
+  }
+
   async function startTask(kind: string) {
+    if (blockWhileConfigDialogOpen()) {
+      return;
+    }
+
     try {
       await StartTask(kind, sanitizeRequest());
     } catch (error) {
@@ -291,6 +375,10 @@
   }
 
   async function startExportTask() {
+    if (blockWhileConfigDialogOpen()) {
+      return;
+    }
+
     const request = sanitizeRequest();
 
     try {
@@ -357,16 +445,16 @@
     }
   }
 
-  function sanitizeRequest(): ExportRequest {
-    const exportMode = form.backend === "oracle" ? form.exportMode || "table" : "table";
+  function sanitizeRequest(request: ExportRequest = form): ExportRequest {
+    const exportMode = request.backend === "oracle" ? request.exportMode || "table" : "table";
     return {
-      ...form,
+      ...request,
       exportMode,
-      conflictPolicy: isOracleSchemaRequest(form)
-        ? form.conflictPolicy || "rename"
-        : form.conflictPolicy,
-      batchSize: Number(form.batchSize) || 1,
-      port: Number(form.port) || 0,
+      conflictPolicy: isOracleSchemaRequest(request)
+        ? request.conflictPolicy || "rename"
+        : request.conflictPolicy,
+      batchSize: Number(request.batchSize) || 1,
+      port: Number(request.port) || 0,
     };
   }
 
@@ -413,6 +501,23 @@
       )
       .map((file) => file.path);
     selectionInitialized = true;
+  }
+
+  async function clearGeneratedFilesList() {
+    if (running || zipBusy) {
+      return;
+    }
+
+    await ClearGeneratedFiles();
+    generatedFiles = [];
+    selectedFiles = [];
+    selectionInitialized = true;
+    zipEnabled = false;
+    zipPassword = "";
+    visibility = {
+      ...visibility,
+      zipPassword: false,
+    };
   }
 
   function handleSelectAllChange(event: Event) {
@@ -497,6 +602,89 @@
       window.clearTimeout(noticeTimer);
       noticeTimer = null;
     }
+  }
+
+  function openConfigDialog() {
+    lastFocusedElement =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    configDraft = { ...form };
+    configDialogOpen = true;
+    void focusConfigDialog();
+  }
+
+  function closeConfigDialog() {
+    configDialogOpen = false;
+    configDraft = null;
+    lastFocusedElement?.focus();
+    lastFocusedElement = null;
+  }
+
+  function onConfigBackdropClick(event: MouseEvent) {
+    if (event.target === event.currentTarget) {
+      closeConfigDialog();
+    }
+  }
+
+  function onConfigBackdropKeydown(event: KeyboardEvent) {
+    if (event.target !== event.currentTarget) {
+      return;
+    }
+
+    if (event.key === "Enter" || event.key === " " || event.key === "Escape") {
+      event.preventDefault();
+      closeConfigDialog();
+    }
+  }
+
+  function onConfigDialogKeydown(event: KeyboardEvent) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeConfigDialog();
+      return;
+    }
+
+    if (event.key !== "Tab") {
+      return;
+    }
+
+    const focusableElements = getDialogFocusableElements();
+    if (focusableElements.length === 0) {
+      event.preventDefault();
+      configDialogCard?.focus();
+      return;
+    }
+
+    const activeElement = document.activeElement;
+    const firstFocusable = focusableElements[0];
+    const lastFocusable = focusableElements[focusableElements.length - 1];
+
+    if (event.shiftKey) {
+      if (activeElement === firstFocusable || activeElement === configDialogCard) {
+        event.preventDefault();
+        lastFocusable.focus();
+      }
+      return;
+    }
+
+    if (activeElement === lastFocusable) {
+      event.preventDefault();
+      firstFocusable.focus();
+    }
+  }
+
+  function saveConfigDialog() {
+    if (!configDraft) {
+      closeConfigDialog();
+      return;
+    }
+
+    form = sanitizeRequest(configDraft);
+    closeConfigDialog();
+  }
+
+  async function saveConfigAndTest() {
+    saveConfigDialog();
+    await startTask("test");
   }
 
   function onConflictBackdropClick(event: MouseEvent) {
@@ -614,229 +802,107 @@
 {#if fatalError}
   <pre class="fatal-error">{fatalError}</pre>
 {:else}
-  <div class:page-shell={true} class:is-entering={entering}>
-    <section class="hero-card">
-      <div class="hero-bar">
-        <div>
-          <h1>Parquet Export Studio</h1>
-          <p class="hero-copy">Oracle 支持单表与按 schema 批量导出，其它数据源保持单表导出</p>
+  <div class:workspace={true} class:is-entering={entering}>
+    <div inert={configDialogOpen} aria-hidden={configDialogOpen}>
+      <header class="topbar">
+        <div class="brand-block">
+          <p class="eyebrow">Parquet Export Studio</p>
+          <h1>导出工作台</h1>
+          <p class="subcopy">将数据库表导出为 Parquet 文件。</p>
         </div>
-        <div class="hero-metrics">
-          <div class="hero-status">
-            <span class:hero-status-dot={true} class:is-running={running}></span>
-            {status}
+
+        <div class="hero-actions">
+          <button
+            class="button button-secondary"
+            disabled={running || configDialogOpen}
+            on:click={openConfigDialog}
+          >
+            配置数据源
+          </button>
+          <button
+            class="button button-secondary"
+            disabled={running || configDialogOpen}
+            on:click={() => startTask("test")}
+          >
+            测试连接
+          </button>
+          <button
+            class="button button-primary"
+            disabled={running || configDialogOpen}
+            on:click={startExportTask}
+          >
+            <span class="button-icon">▶</span>开始导出
+          </button>
+        </div>
+      </header>
+
+      <section class="hero-strip">
+        <div class="hero-status-panel">
+          <div class="status-header">
+            <span class={`status-dot status-${statusTone}`}></span>
+            <span class="status-title">{status}</span>
           </div>
-          <div class="hero-rows">已写入 {numberWithCommas(rowsWritten)} 行</div>
+          <p class="status-copy">
+            当前数据源 <strong>{backendLabel}</strong>
+            {#if connectionSummary}
+              ，连接信息 <strong>{connectionSummary}</strong>
+            {/if}
+            {#if isOracleSchemaMode && form.schema}
+              ，目标 Schema <strong>{form.schema}</strong>
+            {:else if form.table}
+              ，目标表 <strong>{form.table}</strong>
+            {/if}
+          </p>
           {#if running}
-            <div class="hero-progress">
-              <div class="hero-progress-bar"></div>
+            <div class="status-progress" aria-hidden="true">
+              <div class="status-progress-bar"></div>
             </div>
           {/if}
         </div>
-      </div>
 
-      <div class="panel-grid">
-        <section class="panel panel-left">
-          <h2 class="section-title">
-            <span class="section-title-mark" aria-hidden="true"></span>
-            <span>连接配置</span>
-          </h2>
+        <dl class="hero-stats">
+          <div>
+            <dt>已写入</dt>
+            <dd>{numberWithCommas(rowsWritten)}</dd>
+          </div>
+          <div>
+            <dt>生成文件</dt>
+            <dd>{generatedFiles.length}</dd>
+          </div>
+          <div>
+            <dt>日志条数</dt>
+            <dd>{logs.length}</dd>
+          </div>
+        </dl>
+      </section>
 
-          <label class="field field-select">
-            <span class="field-label">数据源</span>
-            <span class="field-frame">
-              <select value={form.backend} on:change={handleBackendChange}>
-                {#each backends as option (option.value)}
-                  <option value={option.value}>{option.label}</option>
-                {/each}
-              </select>
-            </span>
-          </label>
-
-          {#if isMaxCompute}
-            <label class="field">
-              <span class="field-label">Endpoint</span>
-              <span class="field-frame">
-                <input
-                  bind:value={form.maxcomputeEndpoint}
-                  placeholder="https://service.cn-hangzhou.maxcompute.aliyun.com/api"
-                />
-              </span>
-            </label>
-
-            <label class="field">
-              <span class="field-label">Project</span>
-              <span class="field-frame">
-                <input bind:value={form.maxcomputeProject} />
-              </span>
-            </label>
-
-            <div class="field-row">
-              <label class="field grow">
-                <span class="field-label">Access ID</span>
-                <span class="field-frame">
-                  <input bind:value={form.maxcomputeAccessId} />
-                </span>
-              </label>
-
-              <label class="field grow field-password">
-                <span class="field-label">Access Key</span>
-                <span class="field-frame">
-                  <input
-                    bind:value={form.maxcomputeAccessKey}
-                    type={fieldInputType("maxcomputeAccessKey")}
-                  />
-                  <button
-                    type="button"
-                    class="field-visibility-toggle"
-                    aria-label={visibility.maxcomputeAccessKey ? "隐藏" : "显示"}
-                    aria-pressed={visibility.maxcomputeAccessKey}
-                    title={visibility.maxcomputeAccessKey ? "隐藏" : "显示"}
-                    on:click={() => toggleVisibility("maxcomputeAccessKey")}
-                  >
-                    <svg viewBox="0 0 20 20" aria-hidden="true">
-                      <path
-                        d="M2.4 10C3.86 6.95 6.66 5 10 5C13.34 5 16.14 6.95 17.6 10C16.14 13.05 13.34 15 10 15C6.66 15 3.86 13.05 2.4 10Z"
-                      />
-                      <circle cx="10" cy="10" r="2.4" />
-                      {#if !visibility.maxcomputeAccessKey}
-                        <path d="M4 4L16 16" />
-                      {/if}
-                    </svg>
-                  </button>
-                </span>
-              </label>
+      <main class="workbench">
+        <div class="workbench-main">
+          <section class="surface surface-export surface-form">
+            <div class="surface-head">
+              <div>
+                <h2>导出参数</h2>
+              </div>
+              <p class="surface-note">设置输出路径、批次大小和压缩方式。</p>
             </div>
 
-            <div class="field-row">
-              <label class="field grow">
-                <span class="field-label">Schema (optional)</span>
-                <span class="field-frame">
-                  <input bind:value={form.schema} />
-                </span>
-              </label>
-
-              <label class="field grow">
-                <span class="field-label">Table</span>
-                <span class="field-frame">
-                  <input value={form.table} on:input={handleTableInput} />
-                </span>
-              </label>
-            </div>
-
-            <label class="field">
-              <span class="field-label">Partition Spec (optional)</span>
-              <span class="field-frame">
-                <input bind:value={form.partitionSpec} placeholder="ds='2026-03-07', region='cn'" />
-              </span>
-            </label>
-          {:else}
-            <label class="field">
-              <span class="field-label">Host</span>
-              <span class="field-frame">
-                <input bind:value={form.host} />
-              </span>
-            </label>
-
-            <label class="field">
-              <span class="field-label">Port</span>
-              <span class="field-frame">
-                <input type="number" value={form.port} on:input={handlePortInput} />
-              </span>
-            </label>
-
-            <div class="field-row">
-              <label class="field grow">
-                <span class="field-label">Username</span>
-                <span class="field-frame">
-                  <input bind:value={form.username} />
-                </span>
-              </label>
-
-              <label class="field grow field-password">
-                <span class="field-label">Password</span>
-                <span class="field-frame">
-                  <input bind:value={form.password} type={fieldInputType("password")} />
-                  <button
-                    type="button"
-                    class="field-visibility-toggle"
-                    aria-label={visibility.password ? "隐藏" : "显示"}
-                    aria-pressed={visibility.password}
-                    title={visibility.password ? "隐藏" : "显示"}
-                    on:click={() => toggleVisibility("password")}
-                  >
-                    <svg viewBox="0 0 20 20" aria-hidden="true">
-                      <path
-                        d="M2.4 10C3.86 6.95 6.66 5 10 5C13.34 5 16.14 6.95 17.6 10C16.14 13.05 13.34 15 10 15C6.66 15 3.86 13.05 2.4 10Z"
-                      />
-                      <circle cx="10" cy="10" r="2.4" />
-                      {#if !visibility.password}
-                        <path d="M4 4L16 16" />
-                      {/if}
-                    </svg>
-                  </button>
-                </span>
-              </label>
-            </div>
-
-            <label class="field">
-              <span class="field-label">Database / Service Name</span>
-              <span class="field-frame">
-                <input bind:value={form.database} />
-              </span>
-            </label>
-
-            {#if isOracle}
-              <label class="field field-select">
-                <span class="field-label">导出模式</span>
-                <span class="field-frame">
-                  <select value={form.exportMode} on:change={handleExportModeChange}>
-                    <option value="table">单表导出</option>
-                    <option value="schema">按 Schema 导出全部表</option>
-                  </select>
-                </span>
-              </label>
+            {#if isOracleSchemaMode}
+              <div class="mode-banner">
+                <span class="mode-badge">Schema 模式</span>
+                <p>当前将按 Schema 批量导出到目标目录。</p>
+              </div>
             {/if}
 
-            <div class:is-schema-mode={isOracleSchemaMode} class="field-row schema-row">
-              <label class="field grow">
+            <div class="parameter-grid">
+              <label class="field field-span-2">
                 <span class="field-label"
-                  >{isOracleSchemaMode ? "Schema" : "Schema (optional)"}</span
+                  >{isOracleSchemaMode ? "输出目录" : "输出 Parquet 路径"}</span
                 >
                 <span class="field-frame">
-                  <input value={form.schema} on:input={handleSchemaInput} />
+                  <input bind:value={form.outputPath} />
                 </span>
               </label>
 
-              {#if !isOracleSchemaMode}
-                <label class="field grow">
-                  <span class="field-label">Table</span>
-                  <span class="field-frame">
-                    <input value={form.table} on:input={handleTableInput} />
-                  </span>
-                </label>
-              {/if}
-            </div>
-          {/if}
-        </section>
-
-        <div class="panel-stack">
-          <section class="panel">
-            <h2 class="section-title">
-              <span class="section-title-mark" aria-hidden="true"></span>
-              <span>导出参数</span>
-            </h2>
-
-            <label class="field">
-              <span class="field-label"
-                >{isOracleSchemaMode ? "输出目录" : "输出 Parquet 路径"}</span
-              >
-              <span class="field-frame">
-                <input bind:value={form.outputPath} />
-              </span>
-            </label>
-
-            <div class="field-row">
               <label class="field grow">
                 <span class="field-label">批次大小</span>
                 <span class="field-frame">
@@ -850,7 +916,7 @@
                 </span>
               </label>
 
-              <label class="field grow field-select">
+              <label class="field field-select grow">
                 <span class="field-label">压缩</span>
                 <span class="field-frame">
                   <select bind:value={form.compression}>
@@ -862,130 +928,92 @@
               </label>
             </div>
 
-            <p class="panel-note">
-              {#if isOracleSchemaMode}
-                将在输出目录下为 schema 内每张表生成一个独立的 parquet 文件。
-              {:else}
-                单次写入的行数。调大更快，调小更省内存。
-              {/if}
-            </p>
-
-            <div class="button-row">
-              <button
-                class="button button-secondary"
-                disabled={running}
-                on:click={() => startTask("test")}
-              >
-                测试连接
-              </button>
-              <button class="button button-primary" disabled={running} on:click={startExportTask}>
-                <span class="button-icon">▶</span>开始导出
-              </button>
+            <div class="inline-note-row">
+              <p class="panel-note">
+                {#if isOracleSchemaMode}
+                  将在输出目录下为 schema 内每张表生成一个独立的 parquet 文件。
+                {:else}
+                  批次越大速度越快，批次越小内存占用越低。
+                {/if}
+              </p>
+              <p class="output-preview">{form.outputPath || "请设置输出路径"}</p>
             </div>
           </section>
 
-          <section class="panel panel-log">
-            <button
-              type="button"
-              class="panel-toggle"
-              aria-expanded={logsExpanded}
-              on:click={() => (logsExpanded = !logsExpanded)}
-            >
-              <span class="panel-toggle-copy">
-                <span class="panel-toggle-eyebrow">调试输出</span>
-                <span class="panel-toggle-title">运行日志</span>
-              </span>
-              <span class="panel-toggle-meta">
-                <span class="log-badge">{logs.length}</span>
-                <span class="panel-toggle-state">{logsExpanded ? "收起" : "展开"}</span>
-                <svg
-                  class="panel-chevron"
-                  class:is-open={logsExpanded}
-                  width="14"
-                  height="14"
-                  viewBox="0 0 14 14"
-                  fill="none"
-                  aria-hidden="true"
-                >
-                  <path
-                    d="M3.5 5.25L7 8.75L10.5 5.25"
-                    stroke="currentColor"
-                    stroke-width="1.6"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  />
-                </svg>
-              </span>
-            </button>
-
-            <div class="log-collapse" class:is-open={logsExpanded}>
-              <textarea
-                bind:this={logView}
-                readonly
-                placeholder="日志会显示在这里"
-                aria-label="运行日志"
-                on:scroll={handleLogScroll}
-                value={logs.join("\n")}
-              ></textarea>
+          <section class="surface surface-files">
+            <div class="surface-head">
+              <div>
+                <h2>本次生成的 Parquet</h2>
+              </div>
+              <p class="surface-note">查看本次会话生成的文件，并继续打包。</p>
             </div>
-          </section>
-
-          <section class="panel">
-            <h2 class="section-title">
-              <span class="section-title-mark" aria-hidden="true"></span>
-              <span>本次生成的 Parquet</span>
-            </h2>
 
             <div class="generated-toolbar">
-              <label class="list-checkbox master-checkbox">
-                <input
-                  type="checkbox"
-                  checked={allSelected}
-                  disabled={generatedFiles.length === 0}
-                  aria-label="全选文件"
-                  on:change={handleSelectAllChange}
-                />
-                <span>全选文件</span>
-              </label>
-              <span class="generated-meta">已选 {selectedCount} / {generatedFiles.length}</span>
+              <div class="generated-toolbar-main">
+                <label class="list-checkbox master-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    disabled={generatedFiles.length === 0}
+                    aria-label="全选文件"
+                    on:change={handleSelectAllChange}
+                  />
+                  <span>全选文件</span>
+                </label>
+                <span class="generated-meta">已选 {selectedCount} / {generatedFiles.length}</span>
+              </div>
+              <button
+                class="button button-ghost button-inline"
+                disabled={generatedFiles.length === 0 || running || zipBusy}
+                on:click={clearGeneratedFilesList}
+              >
+                清空列表
+              </button>
             </div>
 
-            <div class="generated-list" class:is-empty={generatedFiles.length === 0}>
-              {#if generatedFiles.length === 0}
-                <p class="empty-copy">当前会话还没有生成 parquet 文件。</p>
-              {:else}
-                {#each generatedFiles as file (file.path)}
-                  <label
-                    class="generated-item"
-                    class:is-selected={selectedFiles.includes(file.path)}
-                  >
-                    <span class="list-checkbox">
-                      <input
-                        class="generated-file-checkbox"
-                        type="checkbox"
-                        checked={selectedFiles.includes(file.path)}
-                        on:change={(event) => handleFileSelection(file.path, event)}
-                      />
-                      <span class="generated-file-copy">
-                        <strong>{file.name}</strong>
+            <div class="output-section">
+              <div class="generated-list" class:is-empty={generatedFiles.length === 0}>
+                {#if generatedFiles.length === 0}
+                  <p class="empty-copy">当前会话还没有导出文件。</p>
+                {:else}
+                  {#each generatedFiles as file (file.path)}
+                    <label
+                      class="generated-item"
+                      class:is-selected={selectedFiles.includes(file.path)}
+                    >
+                      <span class="list-checkbox">
+                        <input
+                          class="generated-file-checkbox"
+                          type="checkbox"
+                          checked={selectedFiles.includes(file.path)}
+                          on:change={(event) => handleFileSelection(file.path, event)}
+                        />
+                        <span class="generated-file-copy">
+                          <strong>{file.name}</strong>
+                        </span>
                       </span>
-                    </span>
-                    <span class="generated-file-meta">{formatFileSize(file.size)}</span>
-                  </label>
-                {/each}
-              {/if}
-            </div>
+                      <span class="generated-file-meta">{formatFileSize(file.size)}</span>
+                    </label>
+                  {/each}
+                {/if}
+              </div>
 
-            <div class="zip-controls">
-              <div class="zip-surface">
-                <label class="list-checkbox">
+              <div class="zip-inline">
+                <div class="zip-inline-head">
+                  <div>
+                    <h3>ZIP 打包</h3>
+                    <p>将选中文件打包为 ZIP。</p>
+                  </div>
+                </div>
+
+                <label class="list-checkbox zip-toggle">
                   <input
                     type="checkbox"
                     checked={zipEnabled}
                     disabled={generatedFiles.length === 0}
                     on:change={handleZipEnabledChange}
                   />
-                  <span>ZIP 压缩选中文件</span>
+                  <span>启用 ZIP 压缩</span>
                 </label>
 
                 {#if zipEnabled}
@@ -1032,14 +1060,299 @@
               </div>
             </div>
           </section>
-        </div>
-      </div>
-    </section>
 
-    {#if notice}
-      <div class={`notice-banner notice-${notice.tone}`} role="status" aria-live="polite">
-        <span class="notice-icon" aria-hidden="true">{notice.tone === "success" ? "✓" : "⚠"}</span>
-        <span class="notice-message">{notice.message}</span>
+          <section class="surface surface-log">
+            <button
+              type="button"
+              class="panel-toggle"
+              aria-expanded={logsExpanded}
+              on:click={() => (logsExpanded = !logsExpanded)}
+            >
+              <span class="panel-toggle-copy">
+                <span class="panel-toggle-title">运行日志</span>
+              </span>
+              <span class="panel-toggle-meta">
+                <span class="log-badge">{logs.length}</span>
+                <span class="panel-toggle-state">{logsExpanded ? "收起" : "展开"}</span>
+                <svg
+                  class="panel-chevron"
+                  class:is-open={logsExpanded}
+                  width="14"
+                  height="14"
+                  viewBox="0 0 14 14"
+                  fill="none"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M3.5 5.25L7 8.75L10.5 5.25"
+                    stroke="currentColor"
+                    stroke-width="1.6"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </span>
+            </button>
+
+            <div class="log-collapse" class:is-open={logsExpanded}>
+              <textarea
+                bind:this={logView}
+                readonly
+                placeholder="日志会显示在这里"
+                aria-label="运行日志"
+                on:scroll={handleLogScroll}
+                value={logs.join("\n")}
+              ></textarea>
+            </div>
+          </section>
+        </div>
+      </main>
+
+      {#if notice}
+        <div class={`notice-banner notice-${notice.tone}`} role="status" aria-live="polite">
+          <span class="notice-icon" aria-hidden="true">{notice.tone === "success" ? "✓" : "⚠"}</span
+          >
+          <span class="notice-message">{notice.message}</span>
+        </div>
+      {/if}
+    </div>
+
+    {#if configDialogOpen}
+      <div
+        class="dialog-backdrop"
+        role="button"
+        tabindex="0"
+        aria-label="关闭数据源配置对话框"
+        on:click={onConfigBackdropClick}
+        on:keydown={onConfigBackdropKeydown}
+      >
+        <div
+          bind:this={configDialogCard}
+          class="dialog-card dialog-card-wide"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="configDialogTitle"
+          tabindex="-1"
+          on:keydown={onConfigDialogKeydown}
+        >
+          <div class="dialog-head">
+            <div>
+              <h3 id="configDialogTitle">配置数据源</h3>
+              <p class="dialog-copy">设置连接信息与导出目标，保存后返回工作台继续执行。</p>
+            </div>
+          </div>
+
+          <div class="dialog-form dialog-form-grid surface-form">
+            <label class="field field-select grow">
+              <span class="field-label">数据源</span>
+              <span class="field-frame">
+                <select value={dialogForm.backend} on:change={handleBackendChange}>
+                  {#each backends as option (option.value)}
+                    <option value={option.value}>{option.label}</option>
+                  {/each}
+                </select>
+              </span>
+            </label>
+
+            {#if dialogIsOracle}
+              <label class="field field-select grow">
+                <span class="field-label">导出模式</span>
+                <span class="field-frame">
+                  <select value={dialogForm.exportMode} on:change={handleExportModeChange}>
+                    <option value="table">单表导出</option>
+                    <option value="schema">按 Schema 导出全部表</option>
+                  </select>
+                </span>
+              </label>
+            {:else}
+              <div class="dialog-spacer" aria-hidden="true"></div>
+            {/if}
+
+            {#if dialogIsMaxCompute}
+              <label class="field field-span-2">
+                <span class="field-label">Endpoint</span>
+                <span class="field-frame">
+                  <input
+                    value={dialogForm.maxcomputeEndpoint}
+                    on:input={(event) => handleConfigTextInput("maxcomputeEndpoint", event)}
+                    placeholder="https://service.cn-hangzhou.maxcompute.aliyun.com/api"
+                  />
+                </span>
+              </label>
+
+              <label class="field grow">
+                <span class="field-label">Access ID</span>
+                <span class="field-frame">
+                  <input
+                    value={dialogForm.maxcomputeAccessId}
+                    on:input={(event) => handleConfigTextInput("maxcomputeAccessId", event)}
+                  />
+                </span>
+              </label>
+
+              <label class="field grow field-password">
+                <span class="field-label">Access Key</span>
+                <span class="field-frame">
+                  <input
+                    value={dialogForm.maxcomputeAccessKey}
+                    on:input={(event) => handleConfigTextInput("maxcomputeAccessKey", event)}
+                    type={fieldInputType("maxcomputeAccessKey")}
+                  />
+                  <button
+                    type="button"
+                    class="field-visibility-toggle"
+                    aria-label={visibility.maxcomputeAccessKey ? "隐藏" : "显示"}
+                    aria-pressed={visibility.maxcomputeAccessKey}
+                    title={visibility.maxcomputeAccessKey ? "隐藏" : "显示"}
+                    on:click={() => toggleVisibility("maxcomputeAccessKey")}
+                  >
+                    <svg viewBox="0 0 20 20" aria-hidden="true">
+                      <path
+                        d="M2.4 10C3.86 6.95 6.66 5 10 5C13.34 5 16.14 6.95 17.6 10C16.14 13.05 13.34 15 10 15C6.66 15 3.86 13.05 2.4 10Z"
+                      />
+                      <circle cx="10" cy="10" r="2.4" />
+                      {#if !visibility.maxcomputeAccessKey}
+                        <path d="M4 4L16 16" />
+                      {/if}
+                    </svg>
+                  </button>
+                </span>
+              </label>
+
+              <label class="field">
+                <span class="field-label">Project</span>
+                <span class="field-frame">
+                  <input
+                    value={dialogForm.maxcomputeProject}
+                    on:input={(event) => handleConfigTextInput("maxcomputeProject", event)}
+                  />
+                </span>
+              </label>
+
+              <label class="field grow">
+                <span class="field-label">Table</span>
+                <span class="field-frame">
+                  <input value={dialogForm.table} on:input={handleTableInput} />
+                </span>
+              </label>
+
+              <label class="field grow">
+                <span class="field-label">Schema (optional)</span>
+                <span class="field-frame">
+                  <input
+                    value={dialogForm.schema}
+                    on:input={(event) => handleConfigTextInput("schema", event)}
+                  />
+                </span>
+              </label>
+
+              <label class="field grow">
+                <span class="field-label">Partition Spec (optional)</span>
+                <span class="field-frame">
+                  <input
+                    value={dialogForm.partitionSpec}
+                    on:input={(event) => handleConfigTextInput("partitionSpec", event)}
+                    placeholder="ds='2026-03-07', region='cn'"
+                  />
+                </span>
+              </label>
+            {:else}
+              <label class="field grow">
+                <span class="field-label">Host</span>
+                <span class="field-frame">
+                  <input
+                    value={dialogForm.host}
+                    on:input={(event) => handleConfigTextInput("host", event)}
+                  />
+                </span>
+              </label>
+
+              <label class="field grow">
+                <span class="field-label">Port</span>
+                <span class="field-frame">
+                  <input type="number" value={dialogForm.port} on:input={handlePortInput} />
+                </span>
+              </label>
+
+              <label class="field field-span-2">
+                <span class="field-label">Database / Service</span>
+                <span class="field-frame">
+                  <input
+                    value={dialogForm.database}
+                    on:input={(event) => handleConfigTextInput("database", event)}
+                  />
+                </span>
+              </label>
+
+              <label class="field grow">
+                <span class="field-label">Username</span>
+                <span class="field-frame">
+                  <input
+                    value={dialogForm.username}
+                    on:input={(event) => handleConfigTextInput("username", event)}
+                  />
+                </span>
+              </label>
+
+              <label class="field grow field-password">
+                <span class="field-label">Password</span>
+                <span class="field-frame">
+                  <input
+                    value={dialogForm.password}
+                    on:input={(event) => handleConfigTextInput("password", event)}
+                    type={fieldInputType("password")}
+                  />
+                  <button
+                    type="button"
+                    class="field-visibility-toggle"
+                    aria-label={visibility.password ? "隐藏" : "显示"}
+                    aria-pressed={visibility.password}
+                    title={visibility.password ? "隐藏" : "显示"}
+                    on:click={() => toggleVisibility("password")}
+                  >
+                    <svg viewBox="0 0 20 20" aria-hidden="true">
+                      <path
+                        d="M2.4 10C3.86 6.95 6.66 5 10 5C13.34 5 16.14 6.95 17.6 10C16.14 13.05 13.34 15 10 15C6.66 15 3.86 13.05 2.4 10Z"
+                      />
+                      <circle cx="10" cy="10" r="2.4" />
+                      {#if !visibility.password}
+                        <path d="M4 4L16 16" />
+                      {/if}
+                    </svg>
+                  </button>
+                </span>
+              </label>
+
+              <label class="field grow">
+                <span class="field-label"
+                  >{dialogIsOracleSchemaMode ? "Schema" : "Schema (optional)"}</span
+                >
+                <span class="field-frame">
+                  <input value={dialogForm.schema} on:input={handleSchemaInput} />
+                </span>
+              </label>
+
+              {#if !dialogIsOracleSchemaMode}
+                <label class="field grow">
+                  <span class="field-label">Table</span>
+                  <span class="field-frame">
+                    <input value={dialogForm.table} on:input={handleTableInput} />
+                  </span>
+                </label>
+              {:else}
+                <div class="dialog-spacer" aria-hidden="true"></div>
+              {/if}
+            {/if}
+          </div>
+
+          <div class="dialog-actions">
+            <button class="button button-ghost" on:click={closeConfigDialog}>取消</button>
+            <button class="button button-secondary" on:click={saveConfigAndTest}>
+              保存并测试
+            </button>
+            <button class="button button-primary" on:click={saveConfigDialog}>保存配置</button>
+          </div>
+        </div>
       </div>
     {/if}
 
@@ -1124,253 +1437,350 @@
 {/if}
 
 <style lang="less">
-  .page-shell {
-    padding: 44px 32px 56px;
-  }
-
-  .hero-card,
-  .panel {
-    background: var(--panel-bg);
-    backdrop-filter: blur(14px);
-    border: 1px solid var(--panel-border);
-    border-radius: 28px;
-    box-shadow: var(--shadow);
-  }
-
-  .hero-card {
-    max-width: 1220px;
+  .workspace {
+    max-width: 1480px;
     margin: 0 auto;
-    padding: 36px 34px 40px;
+    padding: 22px 24px 32px;
+  }
+
+  .topbar {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 20px;
+    margin-bottom: 12px;
+  }
+
+  .eyebrow {
+    margin: 0;
+    color: var(--accent-strong);
+    font-size: 10.5px;
+    font-weight: 800;
+    line-height: 1.1;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+  }
+
+  .brand-block h1 {
+    margin: 4px 0 0;
+    font-size: clamp(26px, 3vw, 38px);
+    line-height: 0.96;
+    letter-spacing: -0.055em;
+    font-weight: 800;
+  }
+
+  .subcopy {
+    max-width: 360px;
+    margin: 8px 0 0;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.4;
+  }
+
+  .hero-actions {
+    display: inline-flex;
+    gap: 10px;
+    align-items: center;
+    flex: 0 0 auto;
+    margin-bottom: 2px;
+  }
+
+  .hero-strip,
+  .surface {
     position: relative;
     overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: 24px;
+    background: rgba(255, 255, 255, 0.78);
+    box-shadow: var(--surface-shadow);
+    backdrop-filter: blur(12px);
   }
 
-  .hero-card::before {
+  .hero-strip {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 14px;
+    padding: 20px 22px;
+    margin-bottom: 16px;
+    background:
+      linear-gradient(135deg, rgba(9, 18, 26, 0.95) 0%, rgba(18, 38, 47, 0.88) 70%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent);
+    border-color: rgba(111, 216, 202, 0.15);
+    color: #eef7f5;
+    box-shadow: 0 24px 60px rgba(15, 23, 42, 0.22);
+  }
+
+  .hero-strip::after {
     content: "";
     position: absolute;
-    inset: 0;
-    background:
-      radial-gradient(circle at top right, rgba(47, 122, 118, 0.08), transparent 26%),
-      linear-gradient(180deg, rgba(255, 255, 255, 0.32), transparent 22%);
+    inset: auto -8% -45% auto;
+    width: 340px;
+    height: 340px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(98, 227, 211, 0.18), transparent 60%);
     pointer-events: none;
   }
 
-  .hero-bar {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 24px;
-    margin-bottom: 24px;
+  .hero-status-panel {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    gap: 8px;
   }
 
-  .hero-bar h1 {
+  .status-header {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    background: #8ea0ae;
+    box-shadow: 0 0 0 8px rgba(255, 255, 255, 0.05);
+  }
+
+  .status-dot.status-running {
+    background: #72e8d7;
+    animation: pulse-dot 1.4s ease-in-out infinite;
+  }
+
+  .status-dot.status-success {
+    background: #7fd8b4;
+  }
+
+  .status-dot.status-error {
+    background: #f29078;
+  }
+
+  .status-title {
+    font-size: 18px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+  }
+
+  .status-copy {
     margin: 0;
-    font-size: 34px;
-    line-height: 1.05;
+    max-width: 520px;
+    color: rgba(238, 247, 245, 0.72);
+    line-height: 1.42;
+  }
+
+  .status-copy strong {
+    color: #fff;
+    font-weight: 800;
+  }
+
+  .status-progress {
+    width: min(100%, 420px);
+    height: 3px;
+    border-radius: 999px;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.12);
+  }
+
+  .status-progress-bar {
+    width: 32%;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, rgba(111, 216, 202, 0.22), rgba(111, 216, 202, 1));
+    animation: indeterminate 1.7s ease-in-out infinite;
+  }
+
+  .hero-stats {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(88px, 1fr));
+    gap: 8px;
+    margin: 0;
+  }
+
+  .hero-stats div {
+    min-width: 0;
+    padding-left: 16px;
+    border-left: 1px solid rgba(255, 255, 255, 0.12);
+  }
+
+  .hero-stats dt {
+    margin: 0 0 8px;
+    color: rgba(238, 247, 245, 0.62);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .hero-stats dd {
+    margin: 0;
+    color: #fff;
+    font-family: "SF Mono", "JetBrains Mono", "Menlo", monospace;
+    font-size: 24px;
+    font-weight: 700;
+    letter-spacing: -0.04em;
+  }
+
+  .workbench {
+    display: block;
+  }
+
+  .workbench-main {
+    display: grid;
+    gap: 14px;
+  }
+
+  .surface {
+    padding: 18px 18px 16px;
+    border-radius: 22px;
+  }
+
+  .surface::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto;
+    height: 1px;
+    background: linear-gradient(90deg, rgba(79, 151, 145, 0.34), transparent 70%);
+    pointer-events: none;
+  }
+
+  .surface-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 14px;
+    align-items: end;
+    margin-bottom: 12px;
+  }
+
+  .surface-head h2 {
+    margin: 0;
+    font-size: 20px;
+    line-height: 1;
     letter-spacing: -0.04em;
     font-weight: 800;
   }
 
-  .hero-copy {
-    margin: 10px 0 0;
-    font-size: 15px;
-  }
-
-  .panel-note {
-    margin: 6px 0 0;
-    max-width: 720px;
-    color: #6f7b8d;
+  .surface-note {
+    margin: 0;
+    max-width: 200px;
+    color: var(--muted);
     font-size: 12.5px;
-    line-height: 1.55;
-  }
-
-  .hero-metrics {
-    display: grid;
-    gap: 10px;
-    min-width: 180px;
+    line-height: 1.5;
     text-align: right;
   }
 
-  .hero-status {
+  .surface-form .surface-head {
+    align-items: flex-start;
+    min-height: 30px;
+    margin-bottom: 6px;
+  }
+
+  .surface-form .surface-note {
+    max-width: 162px;
+    padding-top: 1px;
+    line-height: 1.45;
+  }
+
+  .surface-form
+    > :is(label, .field-row, .parameter-grid, .inline-note-row, .mode-banner):not(.surface-head) {
+    margin-top: 9px;
+  }
+
+  .surface-form
+    > .surface-head
+    + :is(label, .field-row, .parameter-grid, .inline-note-row, .mode-banner) {
+    margin-top: 0;
+  }
+
+  .mode-banner {
     display: flex;
     align-items: center;
-    justify-content: flex-end;
-    gap: 8px;
-    color: var(--primary);
-    font-weight: 700;
-    font-size: 15px;
-  }
-
-  .hero-status-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--primary);
-    flex: 0 0 auto;
-  }
-
-  .hero-status-dot.is-running {
-    animation: pulse-dot 1.4s ease-in-out infinite;
-  }
-
-  @keyframes pulse-dot {
-    0%,
-    100% {
-      opacity: 1;
-      transform: scale(1);
-    }
-
-    50% {
-      opacity: 0.4;
-      transform: scale(0.75);
-    }
-  }
-
-  .hero-rows {
-    color: var(--muted);
-    font-family: "SF Mono", "JetBrains Mono", "Menlo", monospace;
-    font-size: 15px;
-  }
-
-  .hero-progress {
-    height: 3px;
-    border-radius: 2px;
-    background: rgba(47, 122, 118, 0.12);
-    overflow: hidden;
-    margin-top: 4px;
-  }
-
-  .hero-progress-bar {
-    width: 30%;
-    height: 100%;
-    border-radius: 2px;
-    background: linear-gradient(90deg, var(--primary), #4ab0a8);
-    animation: indeterminate 1.6s ease-in-out infinite;
-  }
-
-  @keyframes indeterminate {
-    0% {
-      transform: translateX(-100%);
-    }
-
-    100% {
-      transform: translateX(430%);
-    }
-  }
-
-  .panel-grid {
-    display: grid;
-    grid-template-columns: minmax(340px, 400px) minmax(0, 1fr);
-    gap: 22px;
-    align-items: start;
-  }
-
-  .panel-stack {
-    display: grid;
-    gap: 8px;
-  }
-
-  .panel {
-    padding: 22px 20px 20px;
-    position: relative;
-    overflow: hidden;
-    background: linear-gradient(
-      180deg,
-      rgba(255, 255, 255, 0.96) 0%,
-      rgba(249, 251, 252, 0.92) 100%
-    );
-    border-color: rgba(148, 163, 184, 0.24);
-    box-shadow:
-      0 18px 38px rgba(148, 163, 184, 0.11),
-      inset 0 1px 0 rgba(255, 255, 255, 0.8);
-  }
-
-  .panel::before {
-    content: "";
-    position: absolute;
-    inset: 0 auto auto 0;
-    width: 100%;
-    height: 1px;
-    background: linear-gradient(90deg, rgba(47, 122, 118, 0.18), rgba(47, 122, 118, 0));
-    pointer-events: none;
-  }
-
-  .section-title {
-    margin: 0 0 18px;
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    font-size: 18px;
-    font-weight: 800;
-  }
-
-  .section-title-mark {
-    width: 10px;
-    height: 10px;
-    border-radius: 999px;
-    background: linear-gradient(180deg, rgba(47, 122, 118, 0.95) 0%, rgba(45, 94, 117, 0.82) 100%);
-    box-shadow:
-      0 0 0 4px rgba(47, 122, 118, 0.07),
-      0 4px 10px rgba(47, 122, 118, 0.14);
-    flex: 0 0 auto;
-  }
-
-  .field,
-  .field-row {
-    display: flex;
-  }
-
-  .field {
-    flex-direction: column;
-    position: relative;
-    gap: 4px;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 10px 12px;
     margin-bottom: 12px;
+    border: 1px solid rgba(60, 139, 132, 0.16);
+    border-radius: 14px;
+    background: rgba(60, 139, 132, 0.06);
   }
 
+  .mode-banner p {
+    margin: 0;
+    color: #45606a;
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  .mode-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: rgba(60, 139, 132, 0.12);
+    color: var(--accent-strong);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .parameter-grid,
   .field-row {
+    display: grid;
     gap: 10px;
   }
 
+  .parameter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .field-span-2 {
+    grid-column: 1 / -1;
+  }
+
+  .schema-row.is-schema-mode {
+    grid-template-columns: 1fr;
+  }
+
+  .field {
+    display: grid;
+    gap: 4px;
+    margin: 0;
+  }
+
   .grow {
-    flex: 1;
+    min-width: 0;
   }
 
   .field-label {
-    color: #5a6478;
-    font-size: 12px;
-    font-weight: 700;
-    line-height: 1.1;
-    pointer-events: none;
-    padding-left: 3px;
+    color: #5a6777;
+    font-size: 11.5px;
+    font-weight: 800;
+    line-height: 1.2;
+    letter-spacing: 0.01em;
+    padding-left: 2px;
+    min-height: 14px;
   }
 
   .field-frame {
     position: relative;
     display: block;
-    padding: 8px 12px 6px;
-    border: 1px solid rgba(148, 163, 184, 0.28);
-    border-radius: 14px;
-    background: linear-gradient(
-      180deg,
-      rgba(247, 250, 252, 0.98) 0%,
-      rgba(255, 255, 255, 0.96) 100%
-    );
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.86),
-      0 6px 14px rgba(148, 163, 184, 0.07);
+    padding: 9px 12px 8px;
+    min-height: 46px;
+    border: 1px solid var(--field-border);
+    border-radius: 13px;
+    background: var(--field-bg);
     transition:
-      border-color 0.15s ease,
-      box-shadow 0.15s ease,
-      background-color 0.15s ease;
+      border-color 0.16s ease,
+      box-shadow 0.16s ease,
+      background-color 0.16s ease,
+      transform 0.16s ease;
   }
 
   .field:focus-within .field-frame {
-    border-color: rgba(47, 122, 118, 0.34);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.92),
-      0 0 0 3px rgba(47, 122, 118, 0.07),
-      0 8px 18px rgba(47, 122, 118, 0.06);
-    background: linear-gradient(180deg, rgba(248, 252, 251, 1) 0%, rgba(255, 255, 255, 1) 100%);
+    border-color: rgba(60, 139, 132, 0.54);
+    box-shadow: 0 0 0 4px rgba(60, 139, 132, 0.08);
+    background: #fff;
   }
 
   input,
@@ -1384,39 +1794,24 @@
   select,
   textarea {
     width: 100%;
-    padding: 1px 2px 2px;
-    border-radius: 10px;
+    padding: 0;
     border: none;
     background: transparent;
     color: var(--ink);
     outline: none;
-    box-shadow: none;
-    transition:
-      color 0.15s ease,
-      background-color 0.15s ease;
     appearance: none;
-  }
-
-  input:focus,
-  select:focus,
-  textarea:focus {
-    background: transparent;
   }
 
   input::placeholder,
   textarea::placeholder {
-    color: #b0b7c4;
-  }
-
-  input[type="number"] {
-    padding-right: 2px;
+    color: #97a3b2;
   }
 
   select {
-    padding-right: 30px;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'%3E%3Cpath d='M1 1.5L6 6.5L11 1.5' stroke='%23778292' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    padding-right: 26px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'%3E%3Cpath d='M1 1.5L6 6.5L11 1.5' stroke='%236a7283' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
-    background-position: right 1px center;
+    background-position: right center;
     background-size: 12px 8px;
   }
 
@@ -1424,15 +1819,16 @@
     padding-right: 28px;
   }
 
-  .compact-field {
-    margin-top: 12px;
+  .field-select select,
+  input {
+    line-height: 1.25;
   }
 
   .field-visibility-toggle {
     position: absolute;
-    right: 1px;
+    right: 0;
     top: 50%;
-    transform: translateY(calc(-50% - 1px));
+    transform: translateY(-50%);
     width: 28px;
     height: 28px;
     display: inline-flex;
@@ -1442,20 +1838,18 @@
     border: none;
     border-radius: 8px;
     background: transparent;
-    color: #778292;
+    color: #8190a1;
     cursor: pointer;
-    opacity: 0.7;
   }
 
   .field-visibility-toggle:hover {
-    opacity: 1;
-    background: rgba(148, 163, 184, 0.12);
+    color: var(--accent-strong);
+    background: rgba(79, 151, 145, 0.08);
   }
 
   .field-visibility-toggle:focus-visible {
-    opacity: 1;
-    outline: 2px solid rgba(47, 122, 118, 0.28);
-    outline-offset: 1px;
+    outline: 2px solid rgba(79, 151, 145, 0.24);
+    outline-offset: 2px;
   }
 
   :global(.field-visibility-toggle svg) {
@@ -1472,210 +1866,45 @@
     stroke-linejoin: round;
   }
 
-  textarea {
-    min-height: 222px;
-    resize: vertical;
-    padding: 12px 14px;
-    font-family: "SF Mono", "JetBrains Mono", "Menlo", monospace;
-    font-size: 13px;
-    line-height: 1.5;
-    border: 1px solid rgba(148, 163, 184, 0.22);
-    border-color: rgba(148, 163, 184, 0.22);
-    background: rgba(248, 250, 251, 0.95);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
-  }
-
-  textarea:focus {
-    border-color: rgba(47, 122, 118, 0.52);
-    box-shadow: 0 0 0 4px rgba(47, 122, 118, 0.08);
-    background: #fff;
-  }
-
-  .panel-log {
-    padding: 16px;
-    border-color: rgba(47, 122, 118, 0.18);
-  }
-
-  .panel-toggle {
+  .inline-note-row {
     display: flex;
-    align-items: center;
     justify-content: space-between;
-    width: 100%;
-    gap: 12px;
-    padding: 12px 14px;
-    border: 1px solid rgba(148, 163, 184, 0.18);
-    border-radius: 16px;
-    background: linear-gradient(
-      180deg,
-      rgba(248, 250, 250, 0.96) 0%,
-      rgba(252, 253, 253, 0.98) 100%
-    );
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.84),
-      0 8px 18px rgba(148, 163, 184, 0.08);
-    color: inherit;
-    text-align: left;
-    cursor: pointer;
-    user-select: none;
+    gap: 14px;
+    align-items: center;
+    margin-top: 10px;
+  }
+
+  .panel-note,
+  .output-preview,
+  .generated-meta,
+  .generated-file-meta,
+  .zip-note,
+  .empty-copy {
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .panel-note,
+  .zip-note,
+  .empty-copy {
     margin: 0;
-    transition:
-      color 0.15s ease,
-      border-color 0.15s ease,
-      box-shadow 0.15s ease,
-      transform 0.15s ease;
+    line-height: 1.5;
   }
 
-  .panel-toggle:hover {
-    color: var(--primary);
-    border-color: rgba(47, 122, 118, 0.24);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.88),
-      0 10px 20px rgba(47, 122, 118, 0.08);
-  }
-
-  .panel-toggle:focus-visible {
-    outline: none;
-    border-color: rgba(47, 122, 118, 0.4);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.88),
-      0 0 0 4px rgba(47, 122, 118, 0.08);
-  }
-
-  .panel-toggle-copy {
-    display: grid;
-    gap: 2px;
-  }
-
-  .panel-toggle-eyebrow {
-    display: none;
-  }
-
-  .panel-toggle-title {
-    font-size: 17px;
-    font-weight: 800;
-    line-height: 1;
-  }
-
-  .panel-toggle-meta {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    color: var(--muted);
-    flex: 0 0 auto;
-    justify-content: flex-end;
-  }
-
-  .panel-toggle-state {
-    font-size: 11.5px;
-    font-weight: 700;
-    min-width: 24px;
+  .output-preview {
+    margin: 0;
+    max-width: 50%;
+    font-family: "SF Mono", "JetBrains Mono", "Menlo", monospace;
     text-align: right;
+    overflow-wrap: anywhere;
   }
 
-  .panel-chevron {
-    color: var(--muted);
-    transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1);
-    flex: 0 0 auto;
-    margin-left: 2px;
-  }
-
-  .panel-chevron.is-open {
-    transform: rotate(180deg);
-  }
-
-  .log-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 22px;
-    height: 22px;
-    padding: 0 7px;
-    border-radius: 999px;
-    background: rgba(47, 122, 118, 0.1);
-    color: var(--primary);
-    font-size: 11px;
-    font-weight: 800;
-    line-height: 1;
-  }
-
-  .log-collapse {
-    max-height: 0;
-    overflow: hidden;
-    transition: max-height 0.3s cubic-bezier(0.22, 1, 0.36, 1);
-  }
-
-  .log-collapse.is-open {
-    max-height: 400px;
+  .output-section {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 340px);
+    gap: 16px;
+    align-items: start;
     margin-top: 12px;
-  }
-
-  .button-row {
-    display: flex;
-    gap: 10px;
-    margin-top: 14px;
-  }
-
-  .button {
-    border: none;
-    border-radius: 10px;
-    padding: 10px 17px;
-    cursor: pointer;
-    font-weight: 700;
-    font-size: 14px;
-    transition:
-      transform 0.15s ease,
-      opacity 0.15s ease,
-      filter 0.15s ease,
-      box-shadow 0.15s ease,
-      background-color 0.15s ease;
-  }
-
-  .button-icon {
-    margin-right: 5px;
-  }
-
-  .button:hover:not(:disabled) {
-    transform: translateY(-1px);
-    filter: brightness(1.02);
-  }
-
-  .button:active:not(:disabled) {
-    transform: translateY(0);
-  }
-
-  .button:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-  }
-
-  .button-primary {
-    background: linear-gradient(180deg, #41958f 0%, #2f7a76 100%);
-    color: white;
-    box-shadow:
-      0 5px 14px rgba(47, 122, 118, 0.24),
-      inset 0 1px 0 rgba(255, 255, 255, 0.14);
-  }
-
-  .button-primary:hover:not(:disabled) {
-    box-shadow:
-      0 7px 18px rgba(47, 122, 118, 0.28),
-      inset 0 1px 0 rgba(255, 255, 255, 0.16);
-  }
-
-  .button-secondary {
-    background: rgba(255, 255, 255, 0.88);
-    color: var(--secondary);
-    border: 1px solid rgba(45, 94, 117, 0.28);
-  }
-
-  .button-secondary:hover:not(:disabled) {
-    background: rgba(45, 94, 117, 0.05);
-    border-color: rgba(45, 94, 117, 0.38);
-  }
-
-  .button-ghost {
-    background: rgba(148, 163, 184, 0.14);
-    color: var(--ink);
   }
 
   .generated-toolbar,
@@ -1688,59 +1917,51 @@
   }
 
   .generated-toolbar {
-    margin-bottom: 12px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.16);
   }
 
-  .master-checkbox span:last-child {
-    font-weight: 700;
-    color: var(--ink);
-  }
-
-  .generated-meta,
-  .zip-note,
-  .empty-copy,
-  .generated-file-meta {
-    color: var(--muted);
-    font-size: 13px;
+  .generated-toolbar-main {
+    display: inline-flex;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
   }
 
   .generated-list {
     display: grid;
-    gap: 10px;
-    margin-bottom: 14px;
+    gap: 6px;
+    margin-top: 10px;
   }
 
   .generated-list.is-empty {
-    padding: 12px 0 4px;
+    min-height: 132px;
+    padding: 16px 18px;
+    align-content: center;
+    border: 1px dashed rgba(148, 163, 184, 0.24);
+    border-radius: 16px;
+    background: rgba(245, 248, 250, 0.62);
   }
 
   .generated-item {
-    padding: 12px 14px;
-    border: 1px solid rgba(148, 163, 184, 0.24);
-    border-radius: 14px;
-    background: linear-gradient(
-      180deg,
-      rgba(255, 255, 255, 0.94) 0%,
-      rgba(249, 251, 252, 0.92) 100%
-    );
+    padding: 10px 0;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.14);
     transition:
-      border-color 0.15s ease,
-      box-shadow 0.15s ease,
-      transform 0.15s ease;
+      transform 0.18s ease,
+      color 0.18s ease;
+  }
+
+  .generated-item:last-child {
+    border-bottom: none;
   }
 
   .generated-item:hover {
-    border-color: rgba(47, 122, 118, 0.24);
-    box-shadow: 0 6px 18px rgba(148, 163, 184, 0.1);
+    transform: translateX(2px);
   }
 
-  .generated-item.is-selected {
-    border-color: rgba(47, 122, 118, 0.34);
-    background: linear-gradient(
-      180deg,
-      rgba(245, 251, 250, 0.98) 0%,
-      rgba(251, 252, 253, 0.96) 100%
-    );
+  .generated-item.is-selected .generated-file-copy strong,
+  .generated-item.is-selected .generated-file-meta {
+    color: var(--accent-strong);
   }
 
   .list-checkbox {
@@ -1751,22 +1972,13 @@
   }
 
   .list-checkbox input[type="checkbox"] {
-    width: 22px;
-    height: 22px;
-    min-width: 22px;
-    padding: 0;
+    width: 20px;
+    height: 20px;
+    min-width: 20px;
     margin: 0;
-    flex: 0 0 auto;
     border: 1px solid rgba(113, 129, 151, 0.54);
-    border-radius: 7px;
-    background: linear-gradient(
-      180deg,
-      rgba(255, 255, 255, 0.98) 0%,
-      rgba(241, 245, 249, 0.96) 100%
-    );
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.95),
-      0 1px 2px rgba(15, 23, 42, 0.08);
+    border-radius: 6px;
+    background: #fff;
     appearance: none;
     -webkit-appearance: none;
     cursor: pointer;
@@ -1779,58 +1991,45 @@
   }
 
   .list-checkbox input[type="checkbox"]:hover:not(:disabled) {
-    border-color: rgba(47, 122, 118, 0.52);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.96),
-      0 0 0 4px rgba(47, 122, 118, 0.08);
+    border-color: rgba(60, 139, 132, 0.62);
+    box-shadow: 0 0 0 4px rgba(60, 139, 132, 0.08);
   }
 
   .list-checkbox input[type="checkbox"]:focus-visible {
     outline: none;
-    border-color: rgba(47, 122, 118, 0.72);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.96),
-      0 0 0 4px rgba(47, 122, 118, 0.12);
+    border-color: rgba(60, 139, 132, 0.72);
+    box-shadow: 0 0 0 4px rgba(60, 139, 132, 0.1);
   }
 
   .list-checkbox input[type="checkbox"]:checked {
-    border-color: #2f7a76;
-    background: linear-gradient(180deg, #3e8f89 0%, #2f7a76 100%);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.18),
-      0 8px 14px rgba(47, 122, 118, 0.2);
+    border-color: var(--accent-strong);
+    background: var(--accent-strong);
   }
 
   .list-checkbox input[type="checkbox"]:checked::after {
     content: "";
     position: absolute;
-    left: 7px;
-    top: 3px;
-    width: 5px;
-    height: 10px;
+    left: 6px;
+    top: 2px;
+    width: 4px;
+    height: 9px;
     border: solid #fff;
-    border-width: 0 2.5px 2.5px 0;
+    border-width: 0 2px 2px 0;
     transform: rotate(45deg);
-  }
-
-  .list-checkbox input[type="checkbox"]:active:not(:disabled) {
-    transform: scale(0.96);
   }
 
   .list-checkbox input[type="checkbox"]:disabled {
     cursor: not-allowed;
-    opacity: 0.52;
-    box-shadow: none;
+    opacity: 0.45;
   }
 
-  .list-checkbox span:last-child {
-    line-height: 1.2;
+  .master-checkbox span:last-child,
+  .zip-toggle span:last-child {
+    font-weight: 700;
   }
 
   .generated-file-copy {
     min-width: 0;
-    display: flex;
-    align-items: center;
   }
 
   .generated-file-copy strong {
@@ -1844,77 +2043,228 @@
   }
 
   .generated-file-meta {
+    flex: 0 0 auto;
     white-space: nowrap;
     font-family: "SF Mono", "JetBrains Mono", "Menlo", monospace;
-    font-size: 11px;
   }
 
-  .zip-controls {
-    padding-top: 6px;
+  .zip-inline {
+    display: grid;
+    align-content: start;
+    gap: 12px;
+    padding-left: 16px;
+    border-left: 1px solid rgba(148, 163, 184, 0.16);
   }
 
-  .zip-surface {
-    padding: 14px 16px 16px;
-    border: none;
-    border-left: 3px solid rgba(47, 122, 118, 0.22);
-    border-radius: 0 12px 12px 0;
-    background: rgba(247, 250, 250, 0.7);
+  .zip-inline-head h3 {
+    margin: 0;
+    font-size: 17px;
+    letter-spacing: -0.03em;
+  }
+
+  .zip-inline-head p {
+    margin: 4px 0 0;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .zip-toggle {
+    margin-top: 0;
+  }
+
+  .compact-field {
+    margin-top: 0;
   }
 
   .zip-actions {
-    margin-top: 12px;
-  }
-
-  .zip-note,
-  .empty-copy {
-    margin: 0;
+    align-items: flex-end;
+    margin-top: 0;
   }
 
   .zip-note {
+    max-width: 180px;
     text-align: right;
   }
 
-  .fatal-error {
-    max-width: 960px;
-    margin: 40px auto;
-    white-space: pre-wrap;
+  .surface-log {
+    padding-top: 14px;
+  }
+
+  .panel-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    gap: 12px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .panel-toggle-copy {
+    display: grid;
+    gap: 6px;
+  }
+
+  .panel-toggle-title {
+    font-size: 20px;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -0.04em;
+  }
+
+  .panel-toggle-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--muted);
+  }
+
+  .panel-toggle-state {
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .panel-chevron {
+    transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .panel-chevron.is-open {
+    transform: rotate(180deg);
+  }
+
+  .log-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 24px;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: rgba(60, 139, 132, 0.1);
+    color: var(--accent-strong);
+    font-size: 11px;
+    font-weight: 800;
+  }
+
+  .log-collapse {
+    max-height: 0;
+    overflow: hidden;
+    transition:
+      max-height 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+      margin-top 0.28s ease;
+  }
+
+  .log-collapse.is-open {
+    max-height: 420px;
+    margin-top: 16px;
+  }
+
+  textarea {
+    min-height: 220px;
+    resize: vertical;
+    padding: 13px 14px;
+    border: 1px solid var(--field-border);
+    border-radius: 16px;
+    background: rgba(247, 249, 251, 0.9);
+    font-family: "SF Mono", "JetBrains Mono", "Menlo", monospace;
+    font-size: 12.5px;
+    line-height: 1.55;
+  }
+
+  textarea:focus {
+    border-color: rgba(60, 139, 132, 0.56);
+    box-shadow: 0 0 0 4px rgba(60, 139, 132, 0.08);
+    background: #fff;
+  }
+
+  .button {
+    border: none;
+    border-radius: 12px;
+    padding: 11px 18px;
+    cursor: pointer;
+    font-size: 13.5px;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    transition:
+      transform 0.14s ease,
+      background-color 0.14s ease,
+      border-color 0.14s ease,
+      box-shadow 0.14s ease,
+      opacity 0.14s ease;
+  }
+
+  .button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .button:hover:not(:disabled) {
+    transform: translateY(-1px);
+  }
+
+  .button-icon {
+    margin-right: 5px;
+  }
+
+  .button-primary {
+    background: linear-gradient(180deg, #56aaa0 0%, #3c8b84 100%);
+    color: #fff;
+    box-shadow: 0 12px 24px rgba(60, 139, 132, 0.24);
+  }
+
+  .surface-files {
+    background: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.82) 0%,
+      rgba(252, 253, 253, 0.74) 100%
+    );
+  }
+
+  .button-secondary {
+    border: 1px solid rgba(19, 35, 63, 0.12);
+    background: rgba(255, 255, 255, 0.78);
+    color: var(--ink);
+  }
+
+  .button-ghost {
+    background: rgba(148, 163, 184, 0.14);
+    color: var(--ink);
+  }
+
+  .button-inline {
+    padding: 8px 12px;
+    font-size: 12.5px;
+    font-weight: 700;
   }
 
   .notice-banner {
     position: fixed;
     left: 50%;
-    bottom: 28px;
+    bottom: 24px;
     z-index: 1000;
     display: flex;
     align-items: center;
     gap: 12px;
-    min-width: min(460px, calc(100vw - 32px));
+    min-width: min(420px, calc(100vw - 32px));
     max-width: calc(100vw - 32px);
     padding: 12px 16px;
-    border-radius: 8px;
+    border-radius: 12px;
     box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
     color: #fff;
-    animation: notice-in 0.32s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
-  }
-
-  @keyframes notice-in {
-    from {
-      transform: translateX(-50%) translateY(24px);
-      opacity: 0;
-    }
-
-    to {
-      transform: translateX(-50%) translateY(0);
-      opacity: 1;
-    }
+    animation: notice-in 0.28s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
   }
 
   .notice-error {
-    background: linear-gradient(135deg, #c94e3c 0%, #c24133 100%);
+    background: linear-gradient(135deg, #d65d48 0%, #c24133 100%);
   }
 
   .notice-success {
-    background: linear-gradient(135deg, #2f7a76 0%, #2a6764 100%);
+    background: linear-gradient(135deg, #3c8b84 0%, #2f6f69 100%);
   }
 
   .notice-icon {
@@ -1943,33 +2293,70 @@
     align-items: center;
     justify-content: center;
     padding: 24px;
-    background: rgba(15, 23, 42, 0.18);
+    overflow: auto;
+    background: rgba(15, 23, 42, 0.28);
     backdrop-filter: blur(10px);
   }
 
   .dialog-card {
     width: min(560px, 100%);
     padding: 24px;
-    border: 1px solid rgba(148, 163, 184, 0.18);
-    border-radius: 22px;
-    background: linear-gradient(
-      180deg,
-      rgba(253, 254, 254, 0.98) 0%,
-      rgba(246, 249, 249, 0.96) 100%
-    );
-    box-shadow: 0 28px 60px rgba(15, 23, 42, 0.18);
+    border: 1px solid var(--line);
+    border-radius: 24px;
+    background: rgba(251, 252, 253, 0.96);
+    box-shadow: 0 28px 60px rgba(15, 23, 42, 0.22);
+  }
+
+  .dialog-card-wide {
+    width: min(820px, 100%);
+    max-height: min(820px, calc(100vh - 48px));
+    display: flex;
+    flex-direction: column;
+    padding: 22px 22px 20px;
   }
 
   .dialog-card h3 {
     margin: 0 0 10px;
-    font-size: 20px;
+    font-size: 22px;
     font-weight: 800;
+    letter-spacing: -0.03em;
+  }
+
+  .dialog-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: end;
+    margin-bottom: 16px;
   }
 
   .dialog-copy {
     margin: 0;
     color: var(--muted);
     line-height: 1.55;
+  }
+
+  .dialog-form {
+    display: grid;
+    gap: 10px;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    padding: 16px;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 18px;
+    background:
+      linear-gradient(180deg, rgba(248, 251, 252, 0.96), rgba(255, 255, 255, 0.9)),
+      rgba(255, 255, 255, 0.76);
+  }
+
+  .dialog-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+
+  .dialog-spacer {
+    min-height: 0;
   }
 
   .dialog-paths {
@@ -1984,7 +2371,7 @@
     padding: 12px 14px;
     border: 1px solid rgba(148, 163, 184, 0.18);
     border-radius: 14px;
-    background: rgba(255, 255, 255, 0.72);
+    background: rgba(255, 255, 255, 0.74);
   }
 
   .dialog-path-row span {
@@ -2002,41 +2389,84 @@
 
   .dialog-actions {
     display: flex;
+    flex: 0 0 auto;
     justify-content: flex-end;
     gap: 10px;
     margin-top: 18px;
   }
 
-  .is-entering .panel {
-    animation: panel-in 0.38s cubic-bezier(0.22, 1, 0.36, 1) both;
+  .fatal-error {
+    max-width: 960px;
+    margin: 40px auto;
+    white-space: pre-wrap;
   }
 
-  .is-entering .panel-stack .panel:nth-child(1) {
-    animation-delay: 0.04s;
+  .is-entering .hero-strip,
+  .is-entering .surface {
+    animation: panel-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
-  .is-entering .panel-stack .panel:nth-child(2) {
+  .is-entering .surface-export {
+    animation-delay: 0.05s;
+  }
+
+  .is-entering .surface-files {
     animation-delay: 0.1s;
   }
 
-  .is-entering .panel-stack .panel:nth-child(3) {
-    animation-delay: 0.16s;
+  .is-entering .surface-log {
+    animation-delay: 0.15s;
+  }
+
+  .is-entering .generated-item {
+    animation: item-in 0.28s ease both;
+  }
+
+  @keyframes pulse-dot {
+    0%,
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+
+    50% {
+      opacity: 0.45;
+      transform: scale(0.82);
+    }
+  }
+
+  @keyframes indeterminate {
+    0% {
+      transform: translateX(-100%);
+    }
+
+    100% {
+      transform: translateX(430%);
+    }
+  }
+
+  @keyframes notice-in {
+    from {
+      transform: translateX(-50%) translateY(22px);
+      opacity: 0;
+    }
+
+    to {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+    }
   }
 
   @keyframes panel-in {
     from {
       opacity: 0;
-      transform: translateY(12px);
+      transform: translateY(14px);
     }
 
     to {
       opacity: 1;
       transform: translateY(0);
     }
-  }
-
-  .is-entering .generated-item {
-    animation: item-in 0.28s ease both;
   }
 
   @keyframes item-in {
@@ -2051,47 +2481,82 @@
     }
   }
 
-  @media (max-width: 1120px) {
-    .hero-bar,
-    .panel-grid {
+  @media (max-width: 1220px) {
+    .hero-strip {
+      grid-template-columns: 1fr;
+    }
+
+    .hero-stats {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .surface-note {
+      max-width: none;
+      text-align: left;
+    }
+
+    .output-section {
+      grid-template-columns: 1fr;
+      gap: 18px;
+    }
+
+    .zip-inline {
+      padding-left: 0;
+      padding-top: 18px;
+      border-left: none;
+      border-top: 1px solid rgba(148, 163, 184, 0.16);
+    }
+  }
+
+  @media (max-width: 820px) {
+    .workspace {
+      padding: 16px 16px 28px;
+    }
+
+    .topbar,
+    .surface-head,
+    .inline-note-row,
+    .zip-actions,
+    .generated-item,
+    .dialog-actions,
+    .dialog-head {
+      display: grid;
+    }
+
+    .generated-toolbar {
+      gap: 10px;
+    }
+
+    .generated-toolbar-main {
+      justify-content: space-between;
+    }
+
+    .hero-actions {
+      width: 100%;
       display: grid;
       grid-template-columns: 1fr;
     }
 
-    .hero-metrics {
+    .parameter-grid,
+    .field-row,
+    .hero-stats,
+    .dialog-form-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .dialog-spacer {
+      display: none;
+    }
+
+    .mode-banner,
+    .output-preview,
+    .zip-note {
+      max-width: none;
       text-align: left;
     }
 
-    .hero-status {
-      justify-content: flex-start;
-    }
-  }
-
-  @media (max-width: 720px) {
-    .page-shell {
-      padding: 16px;
-    }
-
-    .hero-card,
-    .panel {
-      padding: 20px;
-      border-radius: 22px;
-    }
-
-    .hero-bar h1 {
-      font-size: 30px;
-    }
-
-    .field-row,
-    .button-row,
-    .generated-item,
-    .zip-actions {
-      flex-direction: column;
-    }
-
-    .generated-item,
-    .zip-actions {
-      align-items: flex-start;
+    .hero-actions .button {
+      width: 100%;
     }
 
     .notice-banner {
@@ -2102,9 +2567,10 @@
       min-width: 0;
     }
 
-    .dialog-actions {
-      flex-direction: column-reverse;
-      align-items: stretch;
+    .dialog-card-wide {
+      width: min(100%, 820px);
+      max-height: calc(100vh - 24px);
+      padding: 18px;
     }
   }
 </style>
