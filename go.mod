@@ -1,12 +1,12 @@
 module parquet-export-gui
 
-go 1.24.0
+go 1.25.0
 
 require (
 	github.com/aliyun/aliyun-odps-go-sdk v0.4.21
 	github.com/apache/arrow-go/v18 v18.5.2
 	github.com/go-sql-driver/mysql v1.9.3
-	github.com/jackc/pgx/v5 v5.8.0
+	github.com/jackc/pgx/v5 v5.9.0
 	github.com/sijms/go-ora/v2 v2.9.0
 	github.com/wailsapp/wails/v2 v2.11.0
 )
