@@ -1,6 +1,6 @@
 module parquet-export-gui/legacy-cli
 
-go 1.20
+go 1.25
 
 require (
 	github.com/alexmullins/zip v0.0.0-20180717182244-4affb64b04d0
@@ -15,7 +15,7 @@ require (
 	filippo.io/edwards25519 v1.1.1 // indirect
 	github.com/JohnCGriffin/overflow v0.0.0-20211019200055-46fa312c352c // indirect
 	github.com/andybalholm/brotli v1.0.5 // indirect
-	github.com/apache/thrift v0.17.0 // indirect
+	github.com/apache/thrift v0.23.0 // indirect
 	github.com/goccy/go-json v0.10.2 // indirect
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
