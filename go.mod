@@ -1,6 +1,6 @@
 module parquet-export-gui
 
-go 1.24.0
+go 1.25
 
 require (
 	github.com/aliyun/aliyun-odps-go-sdk v0.4.21
@@ -23,7 +23,7 @@ require (
 	github.com/alibabacloud-go/tea v1.2.2 // indirect
 	github.com/aliyun/credentials-go v1.3.10 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
-	github.com/apache/thrift v0.22.0 // indirect
+	github.com/apache/thrift v0.23.0 // indirect
 	github.com/bep/debounce v1.2.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
